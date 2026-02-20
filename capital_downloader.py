@@ -146,7 +146,7 @@ def get_last_date(collection, date_field='date'):
 
 def insert_data(collection, data_list, unique_field=None):
     if not data_list:
-        return
+        return 0
     if unique_field:
         inserted = 0
         for doc in data_list:
@@ -158,9 +158,11 @@ def insert_data(collection, data_list, unique_field=None):
             if result.upserted_id:
                 inserted += 1
         print(f"  {inserted} nuevos registros insertados (de {len(data_list)} revisados)")
+        return inserted
     else:
         result = collection.insert_many(data_list)
         print(f"  {len(result.inserted_ids)} registros insertados")
+        return len(result.inserted_ids)
 
 
 def main():
@@ -189,8 +191,11 @@ def main():
 
     today = datetime.now()
 
-    ops_start    = ops_last    + timedelta(days=1) if ops_last    else datetime(2024, 10, 31)
-    trades_start = trades_last + timedelta(days=1) if trades_last else datetime(2024, 10, 31)
+    ops_start    = ops_last.replace(tzinfo=None)    + timedelta(days=1) if ops_last    else datetime(2024, 10, 31)
+    trades_start = trades_last.replace(tzinfo=None) + timedelta(days=1) if trades_last else datetime(2024, 10, 31)
+
+    print(f"  Buscando operaciones desde: {ops_start.strftime('%d/%m/%Y')}")
+    print(f"  Buscando trades desde:      {trades_start.strftime('%d/%m/%Y')}")
 
     if ops_start > today and trades_start > today:
         print("Todo está actualizado.")
@@ -198,16 +203,18 @@ def main():
         return
 
     print("Descargando Operaciones...")
+    ops_insertadas = 0
     ops_data = capital.get_transactions_history(ops_start, today)
     if ops_data:
         ops_processed = [{col: item.get(col, '') for col in OPERACIONES_COLUMNS} for item in ops_data]
         print(f"  {len(ops_processed)} operaciones descargadas")
-        insert_data(operaciones_col, ops_processed, unique_field='dealId')
+        ops_insertadas = insert_data(operaciones_col, ops_processed, unique_field='dealId')
     else:
         print("  Sin nuevas operaciones")
 
     print()
     print("Descargando Trades...")
+    trades_insertados = 0
     trades_data = []
     current = trades_start
     while current <= today:
@@ -223,7 +230,7 @@ def main():
             record = {col: flat.get(col, '') for col in TRADES_COLUMNS}
             trades_processed.append(record)
         print(f"  {len(trades_processed)} trades descargados")
-        insert_data(trades_col, trades_processed, unique_field='dealId')
+        trades_insertados = insert_data(trades_col, trades_processed, unique_field='dealId')
     else:
         print("  Sin nuevos trades")
 
@@ -232,13 +239,16 @@ def main():
     print("COMPLETADO")
     print("=" * 50)
 
-    mensaje = (
-        f"✅ Capital.com actualizado\n"
-        f"📊 Operaciones nuevas: {len(ops_processed) if ops_data else 0}\n"
-        f"📈 Trades nuevos: {len(trades_processed) if trades_data else 0}\n"
-        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
-    enviar_telegram(mensaje)
+    if ops_insertadas == 0 and trades_insertados == 0:
+        enviar_telegram(f"✅ Capital.com al día\nNo hay datos nuevos que insertar.\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    else:
+        mensaje = (
+            f"✅ Capital.com actualizado\n"
+            f"📊 Operaciones nuevas: {ops_insertadas}\n"
+            f"📈 Trades nuevos: {trades_insertados}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        enviar_telegram(mensaje)
 
 
 def lambda_handler(event, context):
