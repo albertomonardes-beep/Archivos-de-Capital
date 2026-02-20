@@ -78,16 +78,74 @@ El bot envía un mensaje en tres situaciones:
 
 Se usa el conector **MongoDB Atlas SQL** (disponible en Power BI → Obtener datos).
 
-### Parámetros de conexión
-
-- **URI:** `mongodb+srv://albertomonardes_db_user:CONTRASEÑA@cluster0.2eqgp4q.mongodb.net/capital`
-- **Database:** `capital`
-- **Modo:** Importar
-
 ### Requisito previo
 
 Instalar el driver ODBC de MongoDB desde:
 https://www.mongodb.com/try/download/odbc-driver
+
+### Configuración de Data Federation en MongoDB Atlas
+
+Para que el conector funcione, se debe crear una instancia de Data Federation:
+
+1. En Atlas → **Data Federation** → **Create New Federated Database**
+2. Elegir **Set up manually**
+3. Nombre: `Capital-Federation`, Cloud Provider: **AWS**
+4. Clic en **Add Data Sources** → **Atlas Cluster** → elegir **capital**
+5. Arrastrar las colecciones `operaciones` y `trades` al área central
+6. Clic en **Create**
+7. Ir a **Configuration** → vista **JSON** y reemplazar con:
+
+```json
+{
+  "databases": [
+    {
+      "name": "capital",
+      "collections": [
+        {
+          "name": "operaciones",
+          "dataSources": [
+            {
+              "storeName": "Cluster0",
+              "database": "capital",
+              "collection": "operaciones"
+            }
+          ]
+        },
+        {
+          "name": "trades",
+          "dataSources": [
+            {
+              "storeName": "Cluster0",
+              "database": "capital",
+              "collection": "trades"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "stores": [
+    {
+      "name": "Cluster0",
+      "provider": "atlas",
+      "clusterName": "Cluster0"
+    }
+  ]
+}
+```
+
+### URI de conexión Atlas SQL
+
+```
+mongodb://albertomonardes_db_user:CONTRASEÑA@capital-federation-1ezmkp.a.query.mongodb.net/?ssl=true&authSource=admin&appName=Capital-Federation
+```
+
+### Parámetros en Power BI
+
+- **Obtener datos** → **MongoDB Atlas SQL**
+- **MongoDB URI:** URI de arriba (reemplazar CONTRASEÑA)
+- **Database:** `capital`
+- **Modo:** Importar
 
 ---
 
