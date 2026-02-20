@@ -11,6 +11,8 @@ CAPITAL_API_KEY    = os.getenv("CAPITAL_API_KEY")
 CAPITAL_PASSWORD   = os.getenv("CAPITAL_PASSWORD")
 CAPITAL_IDENTIFIER = os.getenv("CAPITAL_IDENTIFIER")
 MONGODB_URI        = os.getenv("MONGODB_URI")
+TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 DB_NAME            = "capital"
 
 OPERACIONES_COLUMNS = ['date', 'dateUtc', 'transactionType', 'note', 'reference', 'size', 'currency', 'status', 'instrumentName', 'dealId']
@@ -112,6 +114,16 @@ def flatten_dict(d, parent_key='', sep='_'):
         else:
             items.append((new_key, v))
     return dict(items)
+
+
+def enviar_telegram(mensaje):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}, timeout=10)
+    except:
+        pass
 
 
 def connect_to_mongodb():
@@ -217,6 +229,14 @@ def main():
     print("=" * 50)
     print("COMPLETADO")
     print("=" * 50)
+
+    mensaje = (
+        f"✅ Capital.com actualizado\n"
+        f"📊 Operaciones nuevas: {len(ops_processed) if ops_data else 0}\n"
+        f"📈 Trades nuevos: {len(trades_processed) if trades_data else 0}\n"
+        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    enviar_telegram(mensaje)
 
 
 if __name__ == "__main__":
