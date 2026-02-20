@@ -1,18 +1,14 @@
 import os
 import requests
-import pandas as pd
 from datetime import datetime, timedelta
 from pymongo import MongoClient
-from dotenv import load_dotenv
-
-load_dotenv()
 
 CAPITAL_API_KEY    = os.getenv("CAPITAL_API_KEY")
 CAPITAL_PASSWORD   = os.getenv("CAPITAL_PASSWORD")
 CAPITAL_IDENTIFIER = os.getenv("CAPITAL_IDENTIFIER")
 MONGODB_URI        = os.getenv("MONGODB_URI")
-TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN     = (os.getenv("TELEGRAM_TOKEN") or "").strip()
+TELEGRAM_CHAT_ID   = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
 DB_NAME            = "capital"
 
 OPERACIONES_COLUMNS = ['date', 'dateUtc', 'transactionType', 'note', 'reference', 'size', 'currency', 'status', 'instrumentName', 'dealId']
@@ -117,18 +113,21 @@ def flatten_dict(d, parent_key='', sep='_'):
 
 
 def enviar_telegram(mensaje):
+    print("Enviando mensaje Telegram...")
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("ERROR: TELEGRAM_TOKEN o TELEGRAM_CHAT_ID no configurados")
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}, timeout=10)
-    except:
-        pass
+        response = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}, timeout=10)
+        print(f"Telegram respuesta: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Error enviando Telegram: {e}")
 
 
 def connect_to_mongodb():
     print("Conectando a MongoDB...")
-    client = MongoClient(MONGODB_URI)
+    client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
     db = client[DB_NAME]
     print("OK")
     return db
@@ -195,6 +194,7 @@ def main():
 
     if ops_start > today and trades_start > today:
         print("Todo está actualizado.")
+        enviar_telegram(f"✅ Capital.com al día\nNo hay datos nuevos que descargar.\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
         return
 
     print("Descargando Operaciones...")
@@ -209,10 +209,12 @@ def main():
     print()
     print("Descargando Trades...")
     trades_data = []
-    for date in pd.date_range(trades_start, today):
-        trades = capital.get_activity_history_detailed(date)
+    current = trades_start
+    while current <= today:
+        trades = capital.get_activity_history_detailed(current)
         if trades:
             trades_data.extend(trades)
+        current += timedelta(days=1)
 
     if trades_data:
         trades_processed = []
@@ -237,6 +239,16 @@ def main():
         f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     )
     enviar_telegram(mensaje)
+
+
+def lambda_handler(event, context):
+    try:
+        main()
+    except Exception as e:
+        print(f"Error crítico: {e}")
+        enviar_telegram(f"❌ Error en Capital.com Lambda\n{str(e)}\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        raise
+    return {"statusCode": 200}
 
 
 if __name__ == "__main__":
