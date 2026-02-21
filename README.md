@@ -8,8 +8,9 @@ Automatización para descargar datos de trading de Capital.com, almacenarlos en 
 
 1. **Descarga** operaciones y trades desde la API de Capital.com
 2. **Almacena** los datos en MongoDB Atlas (sin duplicados)
-3. **Notifica** por Telegram cuando termina o si hay un error
-4. **Visualiza** los datos en Power BI conectado a MongoDB
+3. **Enriquece** los datos con parámetros fijos por activo (grupo, configuración, apalancamiento)
+4. **Notifica** por Telegram cuando termina o si hay un error
+5. **Visualiza** los datos en Power BI conectado a MongoDB
 
 ---
 
@@ -28,6 +29,7 @@ Capital.com API → AWS Lambda → MongoDB Atlas → Power BI
 | Archivo | Descripción |
 |---|---|
 | `capital_downloader.py` | Script principal que corre en AWS Lambda |
+| `cargar_activos.py` | Script de ejecución única para cargar la colección `activos` en MongoDB |
 
 ---
 
@@ -46,7 +48,7 @@ Capital.com API → AWS Lambda → MongoDB Atlas → Power BI
 
 ### Despliegue
 
-1. Subir `capital_downloader_v2.zip` en AWS Lambda → pestaña **Código** → **Cargar desde** → **Archivo ZIP**
+1. Subir el ZIP en AWS Lambda → pestaña **Código** → **Cargar desde** → **Archivo ZIP**
 2. Hacer clic en **Implementar**
 3. Ejecutar un **Test** para verificar
 
@@ -59,8 +61,39 @@ La función está programada para ejecutarse automáticamente. Actualmente confi
 ## Base de datos MongoDB
 
 - **Base de datos:** `capital`
-- **Colección operaciones:** transacciones de Capital.com (campo único: `dealId`)
-- **Colección trades:** historial de actividad detallado (campo único: `dealId`)
+
+| Colección | Descripción | Campo único |
+|---|---|---|
+| `operaciones` | Transacciones de Capital.com (trades, swaps, depósitos) | `dealId` (clave compuesta para registros sin dealId) |
+| `trades` | Historial de actividad detallado | `dealId` |
+| `activos` | Parámetros fijos por instrumento | `instrumentName` |
+
+### Colección `activos`
+
+Contiene información estática por instrumento, cargada con `cargar_activos.py`:
+
+| Campo | Descripción |
+|---|---|
+| `instrumentName` | Código del activo en Capital.com (ej: `EURUSD`) |
+| `nombre` | Nombre legible (ej: `EUR/USD`) |
+| `grupo` | Categoría (Divisas, Metales, Cripto, M. Primas, Indices) |
+| `apalancamiento` | Apalancamiento máximo del activo |
+| `frenteUSD` | Relación con el USD (Multiplica, Igual, Ignorar) |
+| `configuracion` | Nombre de la configuración de trading aplicada |
+| `fechaInicioConfiguracion` | Fecha desde la cual aplica la configuración (17-12-2025) |
+
+> Los trades abiertos **antes** de `fechaInicioConfiguracion` no aplican configuración. Esta lógica se maneja en Power BI comparando la fecha del trade con este campo.
+
+### Cargar o actualizar activos
+
+Ejecutar localmente (una sola vez, o cuando se agreguen/modifiquen activos):
+
+```powershell
+$env:MONGODB_URI="mongodb+srv://..."
+python cargar_activos.py
+```
+
+El script usa upsert, por lo que es seguro correrlo más de una vez.
 
 ---
 
@@ -91,7 +124,7 @@ Para que el conector funcione, se debe crear una instancia de Data Federation:
 2. Elegir **Set up manually**
 3. Nombre: `Capital-Federation`, Cloud Provider: **AWS**
 4. Clic en **Add Data Sources** → **Atlas Cluster** → elegir **capital**
-5. Arrastrar las colecciones `operaciones` y `trades` al área central
+5. Arrastrar las colecciones `operaciones`, `trades` y `activos` al área central
 6. Clic en **Create**
 7. Ir a **Configuration** → vista **JSON** y reemplazar con:
 
@@ -118,6 +151,16 @@ Para que el conector funcione, se debe crear una instancia de Data Federation:
               "storeName": "Cluster0",
               "database": "capital",
               "collection": "trades"
+            }
+          ]
+        },
+        {
+          "name": "activos",
+          "dataSources": [
+            {
+              "storeName": "Cluster0",
+              "database": "capital",
+              "collection": "activos"
             }
           ]
         }
@@ -147,6 +190,15 @@ mongodb://albertomonardes_db_user:CONTRASEÑA@capital-federation-1ezmkp.a.query.
 - **Database:** `capital`
 - **Modo:** Importar
 
+### Relaciones en Power BI
+
+Crear las siguientes relaciones en el modelo de datos:
+
+| Tabla origen | Campo | Tabla destino | Campo |
+|---|---|---|---|
+| `operaciones` | `instrumentName` | `activos` | `instrumentName` |
+| `trades` | `epic` | `activos` | `instrumentName` |
+
 ---
 
 ## Historial de cambios
@@ -156,3 +208,5 @@ mongodb://albertomonardes_db_user:CONTRASEÑA@capital-federation-1ezmkp.a.query.
 | v1 | Script inicial con pandas y dotenv |
 | v2 | Fix error 404 Telegram: `.strip()` al token. Eliminadas dependencias innecesarias para Lambda. Agregado `lambda_handler` |
 | v3 | Fix mensaje Telegram: ahora muestra registros realmente insertados, no descargados |
+| v4 | Fix swaps/financiación: registros sin `dealId` usaban clave compuesta incorrecta causando que no se insertaran. Fix rango de fechas: buscaba desde el día siguiente al último registro, perdiendo registros tardíos del mismo día |
+| v5 | Nueva colección `activos` con parámetros fijos por instrumento. Nuevo script `cargar_activos.py` para carga inicial |
