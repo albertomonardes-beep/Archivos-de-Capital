@@ -175,12 +175,16 @@ Para cada tabla:
 
 ### Relaciones en Power BI
 
-Crear en la vista **Modelo**:
+Crear en la vista **Modelo** en este orden:
 
 | Tabla origen | Campo | Tabla destino | Campo |
 |---|---|---|---|
 | `operaciones` | `instrumentName` | `activos` | `instrumentName` |
-| `trades` | `epic` | `activos` | `instrumentName` |
+| `trades` | `dealId` | `operaciones` | `dealId` |
+
+El modelo queda en cadena: `activos ← operaciones ← trades`
+
+> ⚠️ No crear relación directa entre `trades` y `activos` — genera rutas ambiguas en Power BI. Los datos de `activos` llegan a `trades` a través de `operaciones`.
 
 ### Columna calculada ConfiguracionAplicada
 
