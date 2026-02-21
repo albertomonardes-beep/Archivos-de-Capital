@@ -7,10 +7,10 @@ Automatización para descargar datos de trading de Capital.com, almacenarlos en 
 ## ¿Qué hace este proyecto?
 
 1. **Descarga** operaciones y trades desde la API de Capital.com
-2. **Almacena** los datos en MongoDB Atlas (sin duplicados)
+2. **Almacena** los datos en MongoDB Atlas (sin duplicados, como números correctamente tipados)
 3. **Enriquece** los datos con parámetros fijos por activo (grupo, configuración, apalancamiento)
 4. **Notifica** por Telegram cuando termina o si hay un error
-5. **Visualiza** los datos en Power BI conectado a MongoDB
+5. **Visualiza** los datos en Power BI conectado a MongoDB vía script Python
 
 ---
 
@@ -82,7 +82,7 @@ Contiene información estática por instrumento, cargada con `cargar_activos.py`
 | `configuracion` | Nombre de la configuración de trading aplicada |
 | `fechaInicioConfiguracion` | Fecha desde la cual aplica la configuración (17-12-2025) |
 
-> Los trades abiertos **antes** de `fechaInicioConfiguracion` no aplican configuración. Esta lógica se maneja en Power BI comparando la fecha del trade con este campo.
+> Los trades abiertos **antes** de `fechaInicioConfiguracion` no aplican configuración. Esta lógica se maneja en Power BI con la columna calculada `ConfiguracionAplicada`.
 
 ### Cargar o actualizar activos
 
@@ -109,95 +109,78 @@ El bot envía un mensaje en tres situaciones:
 
 ## Conexión con Power BI
 
-Se usa el conector **MongoDB Atlas SQL** (disponible en Power BI → Obtener datos).
+La conexión se realiza mediante un **script Python** dentro de Power BI, que se conecta directamente a MongoDB Atlas sin necesidad de drivers ODBC.
 
-### Requisito previo
+### Requisitos previos
 
-Instalar el driver ODBC de MongoDB desde:
-https://www.mongodb.com/try/download/odbc-driver
+Tener instalado en Python local:
 
-### Configuración de Data Federation en MongoDB Atlas
-
-Para que el conector funcione, se debe crear una instancia de Data Federation:
-
-1. En Atlas → **Data Federation** → **Create New Federated Database**
-2. Elegir **Set up manually**
-3. Nombre: `Capital-Federation`, Cloud Provider: **AWS**
-4. Clic en **Add Data Sources** → **Atlas Cluster** → elegir **capital**
-5. Arrastrar las colecciones `operaciones`, `trades` y `activos` al área central
-6. Clic en **Create**
-7. Ir a **Configuration** → vista **JSON** y reemplazar con:
-
-```json
-{
-  "databases": [
-    {
-      "name": "capital",
-      "collections": [
-        {
-          "name": "operaciones",
-          "dataSources": [
-            {
-              "storeName": "Cluster0",
-              "database": "capital",
-              "collection": "operaciones"
-            }
-          ]
-        },
-        {
-          "name": "trades",
-          "dataSources": [
-            {
-              "storeName": "Cluster0",
-              "database": "capital",
-              "collection": "trades"
-            }
-          ]
-        },
-        {
-          "name": "activos",
-          "dataSources": [
-            {
-              "storeName": "Cluster0",
-              "database": "capital",
-              "collection": "activos"
-            }
-          ]
-        }
-      ]
-    }
-  ],
-  "stores": [
-    {
-      "name": "Cluster0",
-      "provider": "atlas",
-      "clusterName": "Cluster0"
-    }
-  ]
-}
+```powershell
+python -m pip install pymongo pandas matplotlib
 ```
 
-### URI de conexión Atlas SQL
+### Script de conexión
 
+En Power BI → **Obtener datos** → **Script de Python** → pegar:
+
+```python
+import pymongo
+import pandas as pd
+
+uri = "mongodb+srv://USUARIO:CONTRASEÑA@cluster0.2eqgp4q.mongodb.net/?appName=Cluster0"
+client = pymongo.MongoClient(uri)
+db = client["capital"]
+
+operaciones = pd.DataFrame(list(db["operaciones"].find())).drop(columns=["_id"], errors="ignore")
+trades = pd.DataFrame(list(db["trades"].find())).drop(columns=["_id"], errors="ignore")
+activos = pd.DataFrame(list(db["activos"].find())).drop(columns=["_id"], errors="ignore")
+
+for col in ["date", "dateUtc"]:
+    if col in operaciones.columns:
+        operaciones[col] = pd.to_datetime(operaciones[col], errors="coerce", utc=True).dt.tz_localize(None)
+
+for col in ["date", "dateUTC"]:
+    if col in trades.columns:
+        trades[col] = pd.to_datetime(trades[col], errors="coerce", utc=True).dt.tz_localize(None)
+
+client.close()
 ```
-mongodb://albertomonardes_db_user:CONTRASEÑA@capital-federation-1ezmkp.a.query.mongodb.net/?ssl=true&authSource=admin&appName=Capital-Federation
-```
 
-### Parámetros en Power BI
+### Configuración Power BI → Opciones → Script de Python
 
-- **Obtener datos** → **MongoDB Atlas SQL**
-- **MongoDB URI:** URI de arriba (reemplazar CONTRASEÑA)
-- **Database:** `capital`
-- **Modo:** Importar
+Verificar que el directorio de Python esté correctamente configurado en:
+**Archivo → Opciones → Creación de scripts de Python**
+
+### Pasos en Power Query tras cargar
+
+Para cada tabla (`operaciones`, `trades`, `activos`):
+1. **Transformar datos** → seleccionar la tabla
+2. En **Pasos aplicados**, eliminar el paso **Tipo cambiado** (clic en la X)
+3. **Cerrar y aplicar**
+
+> Esto evita que Power Query re-interprete los números con la configuración regional local.
 
 ### Relaciones en Power BI
 
-Crear las siguientes relaciones en el modelo de datos:
+Crear en la vista **Modelo**:
 
 | Tabla origen | Campo | Tabla destino | Campo |
 |---|---|---|---|
 | `operaciones` | `instrumentName` | `activos` | `instrumentName` |
 | `trades` | `epic` | `activos` | `instrumentName` |
+
+### Columna calculada ConfiguracionAplicada
+
+En vista **Datos** → tabla `operaciones` → **Nueva columna**:
+
+```
+ConfiguracionAplicada =
+IF(
+    LEFT(operaciones[date], 10) >= "2025-12-17",
+    RELATED(activos[configuracion]),
+    ""
+)
+```
 
 ---
 
@@ -208,5 +191,6 @@ Crear las siguientes relaciones en el modelo de datos:
 | v1 | Script inicial con pandas y dotenv |
 | v2 | Fix error 404 Telegram: `.strip()` al token. Eliminadas dependencias innecesarias para Lambda. Agregado `lambda_handler` |
 | v3 | Fix mensaje Telegram: ahora muestra registros realmente insertados, no descargados |
-| v4 | Fix swaps/financiación: registros sin `dealId` usaban clave compuesta incorrecta causando que no se insertaran. Fix rango de fechas: buscaba desde el día siguiente al último registro, perdiendo registros tardíos del mismo día |
-| v5 | Nueva colección `activos` con parámetros fijos por instrumento. Nuevo script `cargar_activos.py` para carga inicial |
+| v4 | Fix swaps/financiación: registros sin `dealId` usaban clave compuesta incorrecta. Fix rango de fechas: buscaba desde el día siguiente al último registro |
+| v5 | Nueva colección `activos` con parámetros fijos por instrumento. Nuevo script `cargar_activos.py` |
+| v6 | Fix separador decimal: campos numéricos (`size`, `details_size`, etc.) se almacenan como float en MongoDB. Conexión Power BI migrada de ODBC a script Python. Columna `ConfiguracionAplicada` con comparación de texto en DAX |

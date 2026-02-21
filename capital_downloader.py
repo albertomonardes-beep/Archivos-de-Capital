@@ -226,7 +226,14 @@ def main():
     ops_insertadas = 0
     ops_data = capital.get_transactions_history(ops_start, today)
     if ops_data:
-        ops_processed = [{col: item.get(col, '') for col in OPERACIONES_COLUMNS} for item in ops_data]
+        ops_processed = []
+        for item in ops_data:
+            doc = {col: item.get(col, '') for col in OPERACIONES_COLUMNS}
+            try:
+                doc['size'] = float(doc['size']) if doc['size'] != '' else None
+            except (ValueError, TypeError):
+                pass
+            ops_processed.append(doc)
         print(f"  {len(ops_processed)} operaciones descargadas")
         ops_insertadas = insert_data(operaciones_col, ops_processed, unique_field='dealId')
     else:
@@ -245,9 +252,16 @@ def main():
 
     if trades_data:
         trades_processed = []
+        numeric_trade_fields = ['details_size', 'details_level', 'details_openPrice',
+                                'details_stopLevel', 'details_profitLevel']
         for item in trades_data:
             flat = flatten_dict(item)
             record = {col: flat.get(col, '') for col in TRADES_COLUMNS}
+            for field in numeric_trade_fields:
+                try:
+                    record[field] = float(record[field]) if record[field] != '' else None
+                except (ValueError, TypeError):
+                    pass
             trades_processed.append(record)
         print(f"  {len(trades_processed)} trades descargados")
         trades_insertados = insert_data(trades_col, trades_processed, unique_field='dealId')
