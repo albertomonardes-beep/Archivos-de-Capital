@@ -135,6 +135,17 @@ operaciones = pd.DataFrame(list(db["operaciones"].find())).drop(columns=["_id"],
 trades = pd.DataFrame(list(db["trades"].find())).drop(columns=["_id"], errors="ignore")
 activos = pd.DataFrame(list(db["activos"].find())).drop(columns=["_id"], errors="ignore")
 
+# Separador decimal: reemplazar "." por "," para respetar configuración regional
+campos_operaciones = ["size"]
+for col in campos_operaciones:
+    if col in operaciones.columns:
+        operaciones[col] = operaciones[col].apply(lambda x: str(x).replace(".", ",") if pd.notna(x) and str(x) not in ["", "nan", "None"] else None)
+
+campos_trades = ["details_size", "details_level", "details_openPrice", "details_stopLevel", "details_profitLevel"]
+for col in campos_trades:
+    if col in trades.columns:
+        trades[col] = trades[col].apply(lambda x: str(x).replace(".", ",") if pd.notna(x) and str(x) not in ["", "nan", "None"] else None)
+
 for col in ["date", "dateUtc"]:
     if col in operaciones.columns:
         operaciones[col] = pd.to_datetime(operaciones[col], errors="coerce", utc=True).dt.tz_localize(None)
@@ -153,12 +164,14 @@ Verificar que el directorio de Python esté correctamente configurado en:
 
 ### Pasos en Power Query tras cargar
 
-Para cada tabla (`operaciones`, `trades`, `activos`):
-1. **Transformar datos** → seleccionar la tabla
-2. En **Pasos aplicados**, eliminar el paso **Tipo cambiado** (clic en la X)
-3. **Cerrar y aplicar**
+> ⚠️ **Importante:** Power BI crea una copia independiente del script por cada tabla. Al actualizar el script, hay que hacerlo en **cada tabla por separado** (operaciones, trades y activos).
 
-> Esto evita que Power Query re-interprete los números con la configuración regional local.
+Para cada tabla:
+1. **Transformar datos** → seleccionar la tabla
+2. Clic en el engranaje ⚙️ del paso **Origen**
+3. Reemplazar el script con la versión actualizada → **Aceptar**
+4. Eliminar el paso **Tipo cambiado** (clic en la X)
+5. **Cerrar y aplicar**
 
 ### Relaciones en Power BI
 
