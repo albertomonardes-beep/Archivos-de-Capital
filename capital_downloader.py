@@ -144,14 +144,31 @@ def get_last_date(collection, date_field='date'):
     return None
 
 
+def build_filter(doc, unique_field):
+    """Retorna el filtro de búsqueda para el upsert.
+    Si el campo único (dealId) está vacío —como ocurre en ajustes de
+    financiación/swaps— usa una clave compuesta para evitar colisiones."""
+    val = doc.get(unique_field, '')
+    if val:
+        return {unique_field: val}
+    return {
+        'date':            doc.get('date', ''),
+        'transactionType': doc.get('transactionType', ''),
+        'reference':       doc.get('reference', ''),
+        'size':            doc.get('size', ''),
+        'instrumentName':  doc.get('instrumentName', ''),
+    }
+
+
 def insert_data(collection, data_list, unique_field=None):
     if not data_list:
         return 0
     if unique_field:
         inserted = 0
         for doc in data_list:
+            filter_query = build_filter(doc, unique_field)
             result = collection.update_one(
-                {unique_field: doc.get(unique_field)},
+                filter_query,
                 {"$setOnInsert": doc},
                 upsert=True
             )
@@ -191,8 +208,11 @@ def main():
 
     today = datetime.now()
 
-    ops_start    = ops_last.replace(tzinfo=None)    + timedelta(days=1) if ops_last    else datetime(2024, 10, 31)
-    trades_start = trades_last.replace(tzinfo=None) + timedelta(days=1) if trades_last else datetime(2024, 10, 31)
+    # Se busca desde el mismo día del último registro (no +1) para no perder
+    # registros tardíos del mismo día, como ajustes de financiación (swaps).
+    # La deduplicación en insert_data evita reinsertar duplicados.
+    ops_start    = ops_last.replace(tzinfo=None,    hour=0, minute=0, second=0, microsecond=0) if ops_last    else datetime(2024, 10, 31)
+    trades_start = trades_last.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0) if trades_last else datetime(2024, 10, 31)
 
     print(f"  Buscando operaciones desde: {ops_start.strftime('%d/%m/%Y')}")
     print(f"  Buscando trades desde:      {trades_start.strftime('%d/%m/%Y')}")
