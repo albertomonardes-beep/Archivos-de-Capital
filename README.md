@@ -216,6 +216,36 @@ El modelo queda en cadena: `activos ← operaciones ← trades`
 
 > ⚠️ No crear relación directa entre `trades` y `activos` — genera rutas ambiguas en Power BI. Los datos de `activos` llegan a `trades` a través de `operaciones`.
 
+### Tabla Calendario
+
+Tabla calculada con todos los días consecutivos desde el inicio del proyecto:
+
+```dax
+Calendario = CALENDAR(DATE(2024, 10, 31), TODAY())
+```
+
+> La columna de fecha se llama `[Date]`. `TODAY()` se recalcula automáticamente en cada apertura/refresco del archivo.
+
+#### Columnas calculadas en Calendario
+
+**Trades cerrados** (pendiente: verificar filtro correcto en `trades[type]`):
+```dax
+Trades cerrados =
+VAR vFecha = Calendario[Date]
+RETURN
+COUNTROWS(
+    FILTER(
+        ALL(operaciones),
+        DATEVALUE(LEFT(operaciones[date], 10)) = vFecha
+            && LOWER(operaciones[note]) = "trade closed"
+    )
+)
+```
+
+> ⚠️ La columna `Trades abiertos` está en revisión — el campo `trades[type]` a filtrar aún no está confirmado. Pendiente identificar los valores distintos de `type` en la tabla `trades`.
+
+---
+
 ### Columna calculada ConfiguracionAplicada
 
 En vista **Datos** → tabla `operaciones` → **Nueva columna**:
