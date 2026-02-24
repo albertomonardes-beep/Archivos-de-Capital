@@ -211,10 +211,8 @@ def main():
     # Se busca desde el mismo día del último registro (no +1) para no perder
     # registros tardíos del mismo día, como ajustes de financiación (swaps).
     # La deduplicación en insert_data evita reinsertar duplicados.
-    # BACKFILL TEMPORAL: forzar descarga completa desde el inicio para recuperar
-    # registros faltantes (Rebate, TRADE_CORRECTION, VOID). Revertir tras ejecutar.
-    ops_start    = datetime(2024, 10, 31)
-    trades_start = datetime(2024, 10, 31)
+    ops_start    = ops_last.replace(tzinfo=None,    hour=0, minute=0, second=0, microsecond=0) if ops_last    else datetime(2024, 10, 31)
+    trades_start = trades_last.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0) if trades_last else datetime(2024, 10, 31)
 
     print(f"  Buscando operaciones desde: {ops_start.strftime('%d/%m/%Y')}")
     print(f"  Buscando trades desde:      {trades_start.strftime('%d/%m/%Y')}")
