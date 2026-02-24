@@ -235,7 +235,7 @@ def main():
                 pass
             ops_processed.append(doc)
         print(f"  {len(ops_processed)} operaciones descargadas")
-        ops_insertadas = insert_data(operaciones_col, ops_processed, unique_field='dealId')
+        ops_insertadas = insert_data(operaciones_col, ops_processed, unique_field='reference')
     else:
         print("  Sin nuevas operaciones")
 
