@@ -54,7 +54,14 @@ Capital.com API → AWS Lambda → MongoDB Atlas → Power BI
 
 ### Programación (EventBridge)
 
-La función está programada para ejecutarse automáticamente. Actualmente configurada a las **19:39**.
+La función está programada para ejecutarse automáticamente con dos triggers:
+
+| Schedule (UTC) | Hora local (Chile UTC-3) | Propósito |
+|---|---|---|
+| `cron(0 2 * * ? *)` | 23:00 | Captura operaciones del día, incluyendo swaps |
+| `cron(30 9 * * ? *)` | 06:30 | Verificación matutina |
+
+> ⚠️ **Importante:** Capital.com publica las transacciones de swap en su API con un delay de aproximadamente 2-3 horas después de aplicarlas (~19:00 local). Por eso el trigger vespertino está configurado a las 23:00 y no a las 19:30. Correrlo antes del delay hace que los swaps no aparezcan en el historial de la API aún, y quedan para el run de las 6:30.
 
 ---
 
@@ -211,3 +218,4 @@ IF(
 | v4 | Fix swaps/financiación: registros sin `dealId` usaban clave compuesta incorrecta. Fix rango de fechas: buscaba desde el día siguiente al último registro |
 | v5 | Nueva colección `activos` con parámetros fijos por instrumento. Nuevo script `cargar_activos.py` |
 | v6 | Fix separador decimal: campos numéricos (`size`, `details_size`, etc.) se almacenan como float en MongoDB. Conexión Power BI migrada de ODBC a script Python. Columna `ConfiguracionAplicada` con comparación de texto en DAX |
+| v7 | Fix timing swaps: Capital.com publica los swaps en la API con ~2-3h de delay. Trigger vespertino movido de 22:30 UTC (19:30 local) a 02:00 UTC (23:00 local) en EventBridge para garantizar que los swaps estén disponibles al momento de la consulta |
