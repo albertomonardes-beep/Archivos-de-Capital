@@ -71,9 +71,11 @@ La función está programada para ejecutarse automáticamente con dos triggers:
 
 | Colección | Descripción | Campo único |
 |---|---|---|
-| `operaciones` | Transacciones de Capital.com (trades, swaps, depósitos) | `dealId` (clave compuesta para registros sin dealId) |
+| `operaciones` | Transacciones de Capital.com (trades, swaps, depósitos, rebates, correcciones) | `reference` (clave compuesta si está vacío) |
 | `trades` | Historial de actividad detallado | `dealId` |
 | `activos` | Parámetros fijos por instrumento | `instrumentName` |
+
+> **Tipos de transacción en `operaciones`:** `Deposit`, `TRADE`, `SWAP`, `Rebate`, `TRADE_CORRECTION`, `VOID`
 
 ### Colección `activos`
 
@@ -101,6 +103,27 @@ python cargar_activos.py
 ```
 
 El script usa upsert, por lo que es seguro correrlo más de una vez.
+
+---
+
+## Procedimiento de backfill
+
+Si se detectan registros faltantes en `operaciones` (por ejemplo, tras corregir un bug de deduplicación), se puede forzar una descarga completa desde el inicio:
+
+1. En `capital_downloader.py`, reemplazar temporalmente:
+   ```python
+   ops_start    = ops_last.replace(...) if ops_last else datetime(2024, 10, 31)
+   trades_start = trades_last.replace(...) if trades_last else datetime(2024, 10, 31)
+   ```
+   por:
+   ```python
+   ops_start    = datetime(2024, 10, 31)
+   trades_start = datetime(2024, 10, 31)
+   ```
+2. Subir el código a Lambda y hacer Deploy
+3. Aumentar el **Timeout** a **15 minutos** en Configuración general
+4. Ejecutar un **Test** — solo inserta registros nuevos, no duplica los existentes
+5. Revertir ambos cambios (código y timeout)
 
 ---
 
