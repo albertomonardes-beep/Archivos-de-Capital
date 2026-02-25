@@ -228,7 +228,7 @@ Calendario = CALENDAR(DATE(2024, 10, 31), TODAY())
 
 #### Columnas calculadas en Calendario
 
-**Trades cerrados** (pendiente: verificar filtro correcto en `trades[type]`):
+**Trades cerrados:**
 ```dax
 Trades cerrados =
 VAR vFecha = Calendario[Date]
@@ -242,7 +242,35 @@ COUNTROWS(
 )
 ```
 
-> ⚠️ La columna `Trades abiertos` está en revisión — el campo `trades[type]` a filtrar aún no está confirmado. Pendiente identificar los valores distintos de `type` en la tabla `trades`.
+**Trades abiertos:**
+```dax
+Trades Abiertos =
+VAR vFecha = Calendario[Date]
+VAR vFechaStr = FORMAT(vFecha, "YYYY-MM-DD")
+VAR totalEjecutados =
+    COUNTROWS(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[date], 10) = vFechaStr
+                && trades[type] = "WORKING_ORDER"
+                && trades[status] = "EXECUTED"
+        )
+    )
+VAR cerradosEseDia =
+    COUNTROWS(
+        FILTER(
+            ALL(operaciones),
+            LEFT(operaciones[date], 10) = vFechaStr
+                && operaciones[note] = "Trade closed"
+        )
+    )
+RETURN MAX(0, totalEjecutados - cerradosEseDia)
+```
+
+> **Lógica:** En la tabla `trades`, cada apertura y cada cierre de un trade genera un registro `WORKING_ORDER + EXECUTED`. Por lo tanto: aperturas del día = total `WORKING_ORDER+EXECUTED` del día − cierres del día (obtenidos de `operaciones`).
+>
+> **Valores confirmados en `trades[type]`:** `POSITION`, `WORKING_ORDER`, `SWAP`, `STOP_AND_LIMIT`, `Edit`
+> **Valores confirmados en `trades[status]`:** `ACCEPTED`, `EXECUTED`, `MODIFIED`, `REJECTED`
 
 ---
 
@@ -273,3 +301,4 @@ IF(
 | v6 | Fix separador decimal: campos numéricos (`size`, `details_size`, etc.) se almacenan como float en MongoDB. Conexión Power BI migrada de ODBC a script Python. Columna `ConfiguracionAplicada` con comparación de texto en DAX |
 | v7 | Fix timing swaps: Capital.com publica los swaps en la API con ~2-3h de delay. Trigger vespertino movido de 22:30 UTC (19:30 local) a 02:00 UTC (23:00 local) en EventBridge para garantizar que los swaps estén disponibles al momento de la consulta |
 | v8 | Fix tipos de transacción faltantes (Rebate, TRADE_CORRECTION, VOID): el campo único para deduplicación de `operaciones` cambia de `dealId` a `reference`. TRADE_CORRECTION y VOID comparten `dealId` con el TRADE original, provocando que el filtro los descartara como duplicados |
+| v9 | Power BI: columna `Trades Abiertos` en tabla `Calendario`. Lógica: `WORKING_ORDER+EXECUTED` del día en `trades` menos `Trade closed` del día en `operaciones`. Los dealIds entre ambas tablas no coinciden directamente, por lo que el linkeo por ID no es viable. |
