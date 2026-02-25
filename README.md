@@ -272,6 +272,139 @@ RETURN MAX(0, totalEjecutados - cerradosEseDia)
 > **Valores confirmados en `trades[type]`:** `POSITION`, `WORKING_ORDER`, `SWAP`, `STOP_AND_LIMIT`, `Edit`
 > **Valores confirmados en `trades[status]`:** `ACCEPTED`, `EXECUTED`, `MODIFIED`, `REJECTED`
 
+**Deposit** (requiere `status = "processed"`):
+```dax
+Deposit =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 10) = vFechaStr
+            && operaciones[transactionType] = "DEPOSIT"
+            && LOWER(operaciones[status]) = "processed"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Swap:**
+```dax
+Swap =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 10) = vFechaStr
+            && operaciones[transactionType] = "SWAP"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+> ⚠️ **Nota timing swaps:** Capital.com aplica los swaps a las ~21:00 hora Chile (00:00 UTC del día siguiente). Los swaps capturados por el run de las 06:30 pueden aparecer con la fecha UTC (día siguiente). Si el balance queda desfasado, verificar las fechas de los registros SWAP en MongoDB.
+
+**Rebate:**
+```dax
+Rebate =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 10) = vFechaStr
+            && operaciones[transactionType] = "REBATE"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Trade Correction:**
+```dax
+Trade Correction =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 10) = vFechaStr
+            && operaciones[transactionType] = "TRADE_CORRECTION"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Void:**
+```dax
+Void =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 10) = vFechaStr
+            && operaciones[transactionType] = "VOID"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**PnL Diario** (suma de P&L de trades cerrados ese día):
+```dax
+PnL Diario =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 10) = vFechaStr
+            && operaciones[transactionType] = "TRADE"
+            && operaciones[note] = "Trade closed"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Resultado Diario** (suma de todas las columnas anteriores):
+```dax
+Resultado Diario =
+Calendario[Deposit]
+    + Calendario[Swap]
+    + Calendario[Rebate]
+    + Calendario[Trade Correction]
+    + Calendario[Void]
+    + Calendario[PnL Diario]
+```
+
+**Balance Final** (suma acumulada de Resultado Diario):
+```dax
+Balance Final =
+CALCULATE(
+    SUM(Calendario[Resultado Diario]),
+    FILTER(
+        ALL(Calendario),
+        Calendario[Date] <= EARLIER(Calendario[Date])
+    )
+)
+```
+
+**Balance Inicial** (Balance Final del día anterior):
+```dax
+Balance Inicial = Calendario[Balance Final] - Calendario[Resultado Diario]
+```
+
+#### Medidas en Calendario
+
+**Balance Inicial Hoy** (para usar en tarjeta):
+```dax
+Balance Inicial Hoy =
+CALCULATE(
+    MAX(Calendario[Balance Inicial]),
+    Calendario[Date] = TODAY()
+)
+```
+
 ---
 
 ### Columna calculada ConfiguracionAplicada
@@ -302,3 +435,4 @@ IF(
 | v7 | Fix timing swaps: Capital.com publica los swaps en la API con ~2-3h de delay. Trigger vespertino movido de 22:30 UTC (19:30 local) a 02:00 UTC (23:00 local) en EventBridge para garantizar que los swaps estén disponibles al momento de la consulta |
 | v8 | Fix tipos de transacción faltantes (Rebate, TRADE_CORRECTION, VOID): el campo único para deduplicación de `operaciones` cambia de `dealId` a `reference`. TRADE_CORRECTION y VOID comparten `dealId` con el TRADE original, provocando que el filtro los descartara como duplicados |
 | v9 | Power BI: columna `Trades Abiertos` en tabla `Calendario`. Lógica: `WORKING_ORDER+EXECUTED` del día en `trades` menos `Trade closed` del día en `operaciones`. Los dealIds entre ambas tablas no coinciden directamente, por lo que el linkeo por ID no es viable. |
+| v10 | Power BI: columnas `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Diario`, `Resultado Diario`, `Balance Final`, `Balance Inicial` en tabla `Calendario`. Medida `Balance Inicial Hoy` para tarjeta. Nota: `operaciones[date]` es tipo texto en Power BI — usar `LEFT(date, 10)` y `FORMAT()` para comparar fechas. Bug corregido: registro SWAP duplicado del 2026-02-20 eliminado directamente en MongoDB Atlas. |
