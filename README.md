@@ -407,6 +407,187 @@ CALCULATE(
 
 ---
 
+### Tabla CalendarioMensual
+
+Tabla calculada con el primer día de cada mes desde el inicio del proyecto:
+
+```dax
+CalendarioMensual =
+FILTER(
+    CALENDAR(DATE(2024, 10, 1), EOMONTH(TODAY(), 0)),
+    DAY([Date]) = 1
+)
+```
+
+> Cada fila representa un mes. La columna de fecha se llama `[Date]` y contiene el primer día del mes (ej: 2024-10-01, 2024-11-01, etc.). `TODAY()` se recalcula automáticamente.
+
+#### Columnas calculadas en CalendarioMensual
+
+**Mes** (etiqueta de texto legible):
+```dax
+Mes = FORMAT(CalendarioMensual[Date], "MMM YYYY")
+```
+
+**Trades cerrados:**
+```dax
+Trades cerrados =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+COUNTROWS(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && LOWER(operaciones[note]) = "trade closed"
+    )
+)
+```
+
+**Trades Abiertos:**
+```dax
+Trades Abiertos =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+VAR totalEjecutados =
+    COUNTROWS(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[date], 7) = vMesStr
+                && trades[type] = "WORKING_ORDER"
+                && trades[status] = "EXECUTED"
+        )
+    )
+VAR cerradosEseMes =
+    COUNTROWS(
+        FILTER(
+            ALL(operaciones),
+            LEFT(operaciones[date], 7) = vMesStr
+                && operaciones[note] = "Trade closed"
+        )
+    )
+RETURN MAX(0, totalEjecutados - cerradosEseMes)
+```
+
+**Deposit:**
+```dax
+Deposit =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && operaciones[transactionType] = "DEPOSIT"
+            && LOWER(operaciones[status]) = "processed"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Swap:**
+```dax
+Swap =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && operaciones[transactionType] = "SWAP"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Rebate:**
+```dax
+Rebate =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && operaciones[transactionType] = "REBATE"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Trade Correction:**
+```dax
+Trade Correction =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && operaciones[transactionType] = "TRADE_CORRECTION"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Void:**
+```dax
+Void =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && operaciones[transactionType] = "VOID"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**PnL Mensual** (suma de P&L de trades cerrados ese mes):
+```dax
+PnL Mensual =
+VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 7) = vMesStr
+            && operaciones[transactionType] = "TRADE"
+            && operaciones[note] = "Trade closed"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Resultado Mensual** (suma de todas las columnas anteriores):
+```dax
+Resultado Mensual =
+CalendarioMensual[Deposit]
+    + CalendarioMensual[Swap]
+    + CalendarioMensual[Rebate]
+    + CalendarioMensual[Trade Correction]
+    + CalendarioMensual[Void]
+    + CalendarioMensual[PnL Mensual]
+```
+
+**Balance Final** (suma acumulada de Resultado Mensual):
+```dax
+Balance Final =
+CALCULATE(
+    SUM(CalendarioMensual[Resultado Mensual]),
+    FILTER(
+        ALL(CalendarioMensual),
+        CalendarioMensual[Date] <= EARLIER(CalendarioMensual[Date])
+    )
+)
+```
+
+**Balance Inicial** (Balance Final del mes anterior):
+```dax
+Balance Inicial = CalendarioMensual[Balance Final] - CalendarioMensual[Resultado Mensual]
+```
+
+---
+
 ### Columna calculada ConfiguracionAplicada
 
 En vista **Datos** → tabla `operaciones` → **Nueva columna**:
@@ -436,3 +617,4 @@ IF(
 | v8 | Fix tipos de transacción faltantes (Rebate, TRADE_CORRECTION, VOID): el campo único para deduplicación de `operaciones` cambia de `dealId` a `reference`. TRADE_CORRECTION y VOID comparten `dealId` con el TRADE original, provocando que el filtro los descartara como duplicados |
 | v9 | Power BI: columna `Trades Abiertos` en tabla `Calendario`. Lógica: `WORKING_ORDER+EXECUTED` del día en `trades` menos `Trade closed` del día en `operaciones`. Los dealIds entre ambas tablas no coinciden directamente, por lo que el linkeo por ID no es viable. |
 | v10 | Power BI: columnas `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Diario`, `Resultado Diario`, `Balance Final`, `Balance Inicial` en tabla `Calendario`. Medida `Balance Inicial Hoy` para tarjeta. Nota: `operaciones[date]` es tipo texto en Power BI — usar `LEFT(date, 10)` y `FORMAT()` para comparar fechas. Bug corregido: registro SWAP duplicado del 2026-02-20 eliminado directamente en MongoDB Atlas. |
+| v11 | Power BI: nueva tabla calculada `CalendarioMensual` con columna `Mes`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Mensual`, `Resultado Mensual`, `Balance Final`, `Balance Inicial`. Misma lógica que `Calendario` diario pero agrupando por mes usando `LEFT(date, 7)` y `FORMAT(date, "YYYY-MM")`. |
