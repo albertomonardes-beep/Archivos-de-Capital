@@ -74,6 +74,7 @@ La función está programada para ejecutarse automáticamente con dos triggers:
 | `operaciones` | Transacciones de Capital.com (trades, swaps, depósitos, rebates, correcciones) | `reference` (clave compuesta si está vacío) |
 | `trades` | Historial de actividad detallado | `dealId` |
 | `activos` | Parámetros fijos por instrumento | `instrumentName` |
+| `posiciones_abiertas` | Snapshot de posiciones actualmente abiertas (se borra y reescribe en cada ejecución) | — |
 
 > **Tipos de transacción en `operaciones`:** `Deposit`, `TRADE`, `SWAP`, `Rebate`, `TRADE_CORRECTION`, `VOID`
 
@@ -164,6 +165,7 @@ db = client["capital"]
 operaciones = pd.DataFrame(list(db["operaciones"].find())).drop(columns=["_id"], errors="ignore")
 trades = pd.DataFrame(list(db["trades"].find())).drop(columns=["_id"], errors="ignore")
 activos = pd.DataFrame(list(db["activos"].find())).drop(columns=["_id"], errors="ignore")
+posiciones_abiertas = pd.DataFrame(list(db["posiciones_abiertas"].find())).drop(columns=["_id"], errors="ignore")
 
 # Separador decimal: reemplazar "." por "," para respetar configuración regional
 campos_operaciones = ["size"]
@@ -623,6 +625,40 @@ IF(
 
 ---
 
+### Tabla Listado Trades
+
+Tabla calculada que lista cada trade único (abierto o cerrado):
+
+```dax
+Listado Trades =
+DISTINCT(
+    UNION(
+        SELECTCOLUMNS(
+            FILTER(operaciones, operaciones[transactionType] = "TRADE"),
+            "ID Trade", operaciones[dealId]
+        ),
+        SELECTCOLUMNS(
+            posiciones_abiertas,
+            "ID Trade", posiciones_abiertas[dealId]
+        )
+    )
+)
+```
+
+> La primera parte trae los trades **cerrados** desde `operaciones`. La segunda trae los trades actualmente **abiertos** desde `posiciones_abiertas` (snapshot actualizado en cada ejecución del Lambda). `DISTINCT` evita duplicados en la transición de abierto a cerrado.
+
+#### Columna calculada `N°`
+
+```dax
+N° =
+RANKX(
+    'Listado Trades',
+    'Listado Trades'[ID Trade],,ASC,DENSE
+)
+```
+
+---
+
 ## Historial de cambios
 
 | Versión | Cambio |
@@ -638,3 +674,4 @@ IF(
 | v9 | Power BI: columna `Trades Abiertos` en tabla `Calendario`. Lógica: `WORKING_ORDER+EXECUTED` del día en `trades` menos `Trade closed` del día en `operaciones`. Los dealIds entre ambas tablas no coinciden directamente, por lo que el linkeo por ID no es viable. |
 | v10 | Power BI: columnas `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Diario`, `Resultado Diario`, `Balance Final`, `Balance Inicial` en tabla `Calendario`. Medida `Balance Inicial Hoy` para tarjeta. Nota: `operaciones[date]` es tipo texto en Power BI — usar `LEFT(date, 10)` y `FORMAT()` para comparar fechas. Bug corregido: registro SWAP duplicado del 2026-02-20 eliminado directamente en MongoDB Atlas. |
 | v11 | Power BI: nueva tabla calculada `CalendarioMensual` con columnas `Mes`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Mensual`, `Resultado Mensual`, `Balance Final`, `Balance Inicial`, `Rentabilidad %`. Misma lógica que `Calendario` diario pero agrupando por mes usando `LEFT(date, 7)` y `FORMAT(date, "YYYY-MM")`. `Balance Final` y `Balance Inicial` usan `ROUND(..., 2)` para evitar errores de precisión flotante. `Rentabilidad %` multiplica por 100 en la fórmula y se formatea como Número decimal fijo — el formato Porcentaje de Power BI altera el valor internamente. |
+| v12 | Nueva colección MongoDB `posiciones_abiertas`: snapshot de posiciones abiertas guardado en cada ejecución del Lambda (se borra y reescribe completamente). Downloader actualizado con método `get_open_positions()` y lógica de guardado. Power BI: nueva tabla `posiciones_abiertas` en el script de conexión. Nueva tabla calculada `Listado Trades` con `UNION` de trades cerrados (`operaciones`) y abiertos (`posiciones_abiertas`), más columna calculada `N°` con `RANKX`. |
