@@ -569,21 +569,26 @@ CalendarioMensual[Deposit]
     + CalendarioMensual[PnL Mensual]
 ```
 
-**Balance Final** (suma acumulada de Resultado Mensual):
+**Balance Final** (suma acumulada de Resultado Mensual, redondeada a 2 decimales):
 ```dax
 Balance Final =
-CALCULATE(
-    SUM(CalendarioMensual[Resultado Mensual]),
-    FILTER(
-        ALL(CalendarioMensual),
-        CalendarioMensual[Date] <= EARLIER(CalendarioMensual[Date])
-    )
-)
+ROUND(
+    CALCULATE(
+        SUM(CalendarioMensual[Resultado Mensual]),
+        FILTER(
+            ALL(CalendarioMensual),
+            CalendarioMensual[Date] <= EARLIER(CalendarioMensual[Date])
+        )
+    ),
+2)
 ```
 
-**Balance Inicial** (Balance Final del mes anterior):
+**Balance Inicial** (Balance Final del mes anterior, redondeado a 2 decimales):
 ```dax
-Balance Inicial = CalendarioMensual[Balance Final] - CalendarioMensual[Resultado Mensual]
+Balance Inicial =
+ROUND(
+    CalendarioMensual[Balance Final] - CalendarioMensual[Resultado Mensual],
+2)
 ```
 
 **Rentabilidad %** (resultado del mes como porcentaje del balance inicial):
@@ -591,12 +596,15 @@ Balance Inicial = CalendarioMensual[Balance Final] - CalendarioMensual[Resultado
 Rentabilidad % =
 IF(
     CalendarioMensual[Balance Inicial] = 0,
-    BLANK(),
-    DIVIDE(CalendarioMensual[Resultado Mensual], CalendarioMensual[Balance Inicial])
+    0,
+    DIVIDE(
+        CalendarioMensual[Balance Final] - CalendarioMensual[Balance Inicial],
+        CalendarioMensual[Balance Inicial]
+    ) * 100
 )
 ```
 
-> Formatear la columna como **Porcentaje** en Herramientas de columna. No multiplicar por 100 en la fórmula — Power BI lo hace solo al aplicar el formato.
+> Formatear la columna como **Número decimal fijo** — NO como Porcentaje. El `* 100` en la fórmula convierte el ratio en porcentaje directamente (ej: -2,9968 significa -2,9968%). Usar Porcentaje como formato causa que Power BI altere el valor internamente.
 
 ---
 
@@ -629,4 +637,4 @@ IF(
 | v8 | Fix tipos de transacción faltantes (Rebate, TRADE_CORRECTION, VOID): el campo único para deduplicación de `operaciones` cambia de `dealId` a `reference`. TRADE_CORRECTION y VOID comparten `dealId` con el TRADE original, provocando que el filtro los descartara como duplicados |
 | v9 | Power BI: columna `Trades Abiertos` en tabla `Calendario`. Lógica: `WORKING_ORDER+EXECUTED` del día en `trades` menos `Trade closed` del día en `operaciones`. Los dealIds entre ambas tablas no coinciden directamente, por lo que el linkeo por ID no es viable. |
 | v10 | Power BI: columnas `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Diario`, `Resultado Diario`, `Balance Final`, `Balance Inicial` en tabla `Calendario`. Medida `Balance Inicial Hoy` para tarjeta. Nota: `operaciones[date]` es tipo texto en Power BI — usar `LEFT(date, 10)` y `FORMAT()` para comparar fechas. Bug corregido: registro SWAP duplicado del 2026-02-20 eliminado directamente en MongoDB Atlas. |
-| v11 | Power BI: nueva tabla calculada `CalendarioMensual` con columna `Mes`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Mensual`, `Resultado Mensual`, `Balance Final`, `Balance Inicial`, `Rentabilidad %`. Misma lógica que `Calendario` diario pero agrupando por mes usando `LEFT(date, 7)` y `FORMAT(date, "YYYY-MM")`. `Rentabilidad %` = Resultado Mensual / Balance Inicial, sin multiplicar por 100 (Power BI aplica el factor al formatear como Porcentaje). |
+| v11 | Power BI: nueva tabla calculada `CalendarioMensual` con columnas `Mes`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Mensual`, `Resultado Mensual`, `Balance Final`, `Balance Inicial`, `Rentabilidad %`. Misma lógica que `Calendario` diario pero agrupando por mes usando `LEFT(date, 7)` y `FORMAT(date, "YYYY-MM")`. `Balance Final` y `Balance Inicial` usan `ROUND(..., 2)` para evitar errores de precisión flotante. `Rentabilidad %` multiplica por 100 en la fórmula y se formatea como Número decimal fijo — el formato Porcentaje de Power BI altera el valor internamente. |
