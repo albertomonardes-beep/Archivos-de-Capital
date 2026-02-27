@@ -76,6 +76,23 @@ class CapitalComAPI:
             current_date += timedelta(days=1)
         return all_transactions
 
+    def get_open_positions(self):
+        if not self.session_token:
+            return []
+        url = f"{self.base_url}/api/v1/positions"
+        headers = {
+            "X-CAP-API-KEY": self.api_key,
+            "X-SECURITY-TOKEN": self.session_token,
+            "CST": self.cst
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                return response.json().get('positions', [])
+        except:
+            pass
+        return []
+
     def get_activity_history_detailed(self, date_obj):
         if not self.session_token:
             return []
@@ -195,6 +212,7 @@ def main():
     db = connect_to_mongodb()
     operaciones_col = db["operaciones"]
     trades_col = db["trades"]
+    posiciones_col = db["posiciones_abiertas"]
 
     print()
     print("Verificando últimas fechas en MongoDB...")
@@ -267,6 +285,32 @@ def main():
         trades_insertados = insert_data(trades_col, trades_processed, unique_field='dealId')
     else:
         print("  Sin nuevos trades")
+
+    print()
+    print("Actualizando posiciones abiertas...")
+    open_positions = capital.get_open_positions()
+    posiciones_col.delete_many({})
+    if open_positions:
+        docs = []
+        for p in open_positions:
+            pos = p.get('position', {})
+            mkt = p.get('market', {})
+            docs.append({
+                'dealId':        pos.get('dealId', ''),
+                'epic':          mkt.get('epic', ''),
+                'instrumentName': mkt.get('instrumentName', ''),
+                'direction':     pos.get('direction', ''),
+                'size':          pos.get('size'),
+                'level':         pos.get('level'),
+                'openLevel':     pos.get('openLevel'),
+                'stopLevel':     pos.get('stopLevel'),
+                'currency':      pos.get('currency', ''),
+                'date':          datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+        posiciones_col.insert_many(docs)
+        print(f"  {len(docs)} posiciones abiertas guardadas")
+    else:
+        print("  Sin posiciones abiertas")
 
     print()
     print("=" * 50)
