@@ -247,9 +247,8 @@ COUNTROWS(
 **Trades abiertos:**
 ```dax
 Trades Abiertos =
-VAR vFecha = Calendario[Date]
-VAR vFechaStr = FORMAT(vFecha, "YYYY-MM-DD")
-VAR totalEjecutados =
+VAR vFechaStr = FORMAT(Calendario[Date], "YYYY-MM-DD")
+VAR TotalWO =
     COUNTROWS(
         FILTER(
             ALL(trades),
@@ -258,18 +257,23 @@ VAR totalEjecutados =
                 && trades[status] = "EXECUTED"
         )
     )
-VAR cerradosEseDia =
+VAR TradesUnicos =
+    SUMMARIZE(
+        FILTER(ALL(operaciones), LOWER(operaciones[note]) = "trade closed"),
+        operaciones[dealId],
+        "FechaCierre", MIN(operaciones[date])
+    )
+VAR CerradosEseDia =
     COUNTROWS(
         FILTER(
-            ALL(operaciones),
-            LEFT(operaciones[date], 10) = vFechaStr
-                && operaciones[note] = "Trade closed"
+            TradesUnicos,
+            LEFT([FechaCierre], 10) = vFechaStr
         )
     )
-RETURN MAX(0, totalEjecutados - cerradosEseDia)
+RETURN MAX(0, TotalWO - CerradosEseDia)
 ```
 
-> **Lógica:** En la tabla `trades`, cada apertura y cada cierre de un trade genera un registro `WORKING_ORDER + EXECUTED`. Por lo tanto: aperturas del día = total `WORKING_ORDER+EXECUTED` del día − cierres del día (obtenidos de `operaciones`).
+> **Lógica:** En la tabla `trades`, cada apertura y cierre de un trade genera un `WORKING_ORDER+EXECUTED`. `TradesUnicos` usa `SUMMARIZE+MIN` para contar cada trade cerrado UNA sola vez (por su fecha de primer cierre), evitando que los cierres parciales (GOLD, AUDUSD) inflen el conteo. La suma total de esta columna cuadra con el total de `Listado Trades`.
 >
 > **Valores confirmados en `trades[type]`:** `POSITION`, `WORKING_ORDER`, `SWAP`, `STOP_AND_LIMIT`, `Edit`
 > **Valores confirmados en `trades[status]`:** `ACCEPTED`, `EXECUTED`, `MODIFIED`, `REJECTED`
@@ -448,7 +452,7 @@ COUNTROWS(
 ```dax
 Trades Abiertos =
 VAR vMesStr = FORMAT(CalendarioMensual[Date], "YYYY-MM")
-VAR totalEjecutados =
+VAR TotalWO =
     COUNTROWS(
         FILTER(
             ALL(trades),
@@ -457,15 +461,20 @@ VAR totalEjecutados =
                 && trades[status] = "EXECUTED"
         )
     )
-VAR cerradosEseMes =
+VAR TradesUnicos =
+    SUMMARIZE(
+        FILTER(ALL(operaciones), LOWER(operaciones[note]) = "trade closed"),
+        operaciones[dealId],
+        "FechaCierre", MIN(operaciones[date])
+    )
+VAR CerradosEseMes =
     COUNTROWS(
         FILTER(
-            ALL(operaciones),
-            LEFT(operaciones[date], 7) = vMesStr
-                && operaciones[note] = "Trade closed"
+            TradesUnicos,
+            LEFT([FechaCierre], 7) = vMesStr
         )
     )
-RETURN MAX(0, totalEjecutados - cerradosEseMes)
+RETURN MAX(0, TotalWO - CerradosEseMes)
 ```
 
 **Deposit:**
@@ -675,3 +684,4 @@ RANKX(
 | v10 | Power BI: columnas `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Diario`, `Resultado Diario`, `Balance Final`, `Balance Inicial` en tabla `Calendario`. Medida `Balance Inicial Hoy` para tarjeta. Nota: `operaciones[date]` es tipo texto en Power BI — usar `LEFT(date, 10)` y `FORMAT()` para comparar fechas. Bug corregido: registro SWAP duplicado del 2026-02-20 eliminado directamente en MongoDB Atlas. |
 | v11 | Power BI: nueva tabla calculada `CalendarioMensual` con columnas `Mes`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Mensual`, `Resultado Mensual`, `Balance Final`, `Balance Inicial`, `Rentabilidad %`. Misma lógica que `Calendario` diario pero agrupando por mes usando `LEFT(date, 7)` y `FORMAT(date, "YYYY-MM")`. `Balance Final` y `Balance Inicial` usan `ROUND(..., 2)` para evitar errores de precisión flotante. `Rentabilidad %` multiplica por 100 en la fórmula y se formatea como Número decimal fijo — el formato Porcentaje de Power BI altera el valor internamente. |
 | v12 | Nueva colección MongoDB `posiciones_abiertas`: snapshot de posiciones abiertas guardado en cada ejecución del Lambda (se borra y reescribe completamente). Downloader actualizado con método `get_open_positions()` y lógica de guardado. Power BI: nueva tabla `posiciones_abiertas` en el script de conexión. Nueva tabla calculada `Listado Trades` con `UNION` de trades cerrados (`operaciones`) y abiertos (`posiciones_abiertas`), más columna calculada `N°` con `RANKX`. |
+| v13 | Fix definitivo `posiciones_abiertas`: reemplaza llamada a API `/positions` de Capital.com (que devolvía vacío) por función `calculate_open_trades_from_mongodb()` que detecta trades abiertos comparando `WO+EXECUTED` en `trades` contra cierres en `operaciones` usando prefijos de 34 chars del `dealId`. Fix `Trades Abiertos` en `Calendario` y `CalendarioMensual`: usa `SUMMARIZE+MIN` para contar trades únicos cerrados (208) en lugar de eventos de cierre (211), eliminando el doble conteo por cierres parciales (GOLD, AUDUSD). La suma total de `Trades Abiertos` cuadra ahora con `Listado Trades`. |
