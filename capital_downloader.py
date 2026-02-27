@@ -76,22 +76,6 @@ class CapitalComAPI:
             current_date += timedelta(days=1)
         return all_transactions
 
-    def get_open_positions(self):
-        if not self.session_token:
-            return []
-        url = f"{self.base_url}/api/v1/positions"
-        headers = {
-            "X-CAP-API-KEY": self.api_key,
-            "X-SECURITY-TOKEN": self.session_token,
-            "CST": self.cst
-        }
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                return response.json().get('positions', [])
-        except:
-            pass
-        return []
 
     def get_activity_history_detailed(self, date_obj):
         if not self.session_token:
@@ -199,6 +183,55 @@ def insert_data(collection, data_list, unique_field=None):
         return len(result.inserted_ids)
 
 
+def calculate_open_trades_from_mongodb(db):
+    """
+    Detecta trades abiertos comparando trades WO+EXECUTED contra cierres en operaciones.
+    Un trade está abierto si su prefijo (primeros 34 chars del dealId) aparece en
+    trades como WO+EXECUTED pero no tiene cierre correspondiente en operaciones.
+    """
+    wo_executed = list(db["trades"].find(
+        {"type": "WORKING_ORDER", "status": "EXECUTED"},
+        {"dealId": 1, "epic": 1, "details_marketName": 1, "details_direction": 1,
+         "details_size": 1, "details_level": 1, "details_openPrice": 1,
+         "details_stopLevel": 1, "details_currency": 1}
+    ))
+    trade_closures = list(db["operaciones"].find(
+        {"transactionType": "TRADE"},
+        {"dealId": 1}
+    ))
+
+    closed_prefixes = set(
+        doc["dealId"][:34] for doc in trade_closures
+        if doc.get("dealId") and len(doc["dealId"]) >= 34
+    )
+
+    wo_by_prefix = {}
+    for doc in wo_executed:
+        deal_id = doc.get("dealId", "")
+        if not deal_id or len(deal_id) < 34:
+            continue
+        prefix = deal_id[:34]
+        if prefix not in wo_by_prefix:
+            wo_by_prefix[prefix] = doc
+
+    open_docs = []
+    for prefix, trade in wo_by_prefix.items():
+        if prefix not in closed_prefixes:
+            open_docs.append({
+                "dealId":         trade.get("dealId", ""),
+                "epic":           trade.get("epic", ""),
+                "instrumentName": trade.get("details_marketName", ""),
+                "direction":      trade.get("details_direction", ""),
+                "size":           trade.get("details_size"),
+                "level":          trade.get("details_level"),
+                "openLevel":      trade.get("details_openPrice"),
+                "stopLevel":      trade.get("details_stopLevel"),
+                "currency":       trade.get("details_currency", ""),
+                "date":           datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+    return open_docs
+
+
 def main():
     print("=" * 50)
     print("CAPITAL.COM -> MONGODB")
@@ -288,27 +321,11 @@ def main():
 
     print()
     print("Actualizando posiciones abiertas...")
-    open_positions = capital.get_open_positions()
+    open_positions = calculate_open_trades_from_mongodb(db)
     posiciones_col.delete_many({})
     if open_positions:
-        docs = []
-        for p in open_positions:
-            pos = p.get('position', {})
-            mkt = p.get('market', {})
-            docs.append({
-                'dealId':        pos.get('dealId', ''),
-                'epic':          mkt.get('epic', ''),
-                'instrumentName': mkt.get('instrumentName', ''),
-                'direction':     pos.get('direction', ''),
-                'size':          pos.get('size'),
-                'level':         pos.get('level'),
-                'openLevel':     pos.get('openLevel'),
-                'stopLevel':     pos.get('stopLevel'),
-                'currency':      pos.get('currency', ''),
-                'date':          datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            })
-        posiciones_col.insert_many(docs)
-        print(f"  {len(docs)} posiciones abiertas guardadas")
+        posiciones_col.insert_many(open_positions)
+        print(f"  {len(open_positions)} posiciones abiertas guardadas")
     else:
         print("  Sin posiciones abiertas")
 
