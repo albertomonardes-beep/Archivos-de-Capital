@@ -161,6 +161,24 @@ def build_filter(doc, unique_field):
     }
 
 
+def fix_existing_open_prices(trades_col):
+    """Rellena details_openPrice con details_level para registros WORKING_ORDER/EXECUTED donde falta."""
+    result = trades_col.update_many(
+        {
+            'type': 'WORKING_ORDER',
+            'status': 'EXECUTED',
+            '$or': [
+                {'details_openPrice': {'$exists': False}},
+                {'details_openPrice': None},
+                {'details_openPrice': 0},
+                {'details_openPrice': 0.0}
+            ]
+        },
+        [{'$set': {'details_openPrice': '$details_level'}}]
+    )
+    print(f"  {result.modified_count} registros actualizados con precio de apertura")
+
+
 def insert_data(collection, data_list, unique_field=None):
     if not data_list:
         return 0
@@ -248,6 +266,10 @@ def main():
     posiciones_col = db["posiciones_abiertas"]
 
     print()
+    print("Corrigiendo precios de apertura faltantes en registros existentes...")
+    fix_existing_open_prices(trades_col)
+
+    print()
     print("Verificando últimas fechas en MongoDB...")
 
     ops_last   = get_last_date(operaciones_col, 'date')
@@ -313,6 +335,9 @@ def main():
                     record[field] = float(record[field]) if record[field] != '' else None
                 except (ValueError, TypeError):
                     pass
+            # Rellenar openPrice faltante para órdenes ejecutadas
+            if not record.get('details_openPrice') and record.get('type') == 'WORKING_ORDER' and record.get('status') == 'EXECUTED':
+                record['details_openPrice'] = record.get('details_level')
             trades_processed.append(record)
         print(f"  {len(trades_processed)} trades descargados")
         trades_insertados = insert_data(trades_col, trades_processed, unique_field='dealId')
