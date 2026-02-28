@@ -666,6 +666,190 @@ RANKX(
 )
 ```
 
+#### Columna calculada `Instrumento`
+
+```dax
+Instrumento =
+VAR vID = 'Listado Trades'[ID Trade]
+RETURN
+    CALCULATE(
+        MIN(operaciones[instrumentName]),
+        FILTER(
+            ALL(operaciones),
+            operaciones[dealId] = vID
+                && operaciones[transactionType] = "TRADE"
+        )
+    )
+```
+
+#### Columna calculada `Fecha Apertura`
+
+```dax
+Fecha Apertura =
+VAR vID = 'Listado Trades'[ID Trade]
+VAR vPrefix = LEFT(vID, 34)
+RETURN
+    IFERROR(
+        DATEVALUE(
+            LEFT(
+                MINX(
+                    FILTER(
+                        ALL(trades),
+                        LEFT(trades[dealId], 34) = vPrefix
+                            && trades[type] = "WORKING_ORDER"
+                            && trades[status] = "EXECUTED"
+                    ),
+                    trades[date]
+                ),
+                10
+            )
+        ),
+        BLANK()
+    )
+```
+
+#### Columna calculada `Dirección`
+
+```dax
+Dirección =
+VAR vPrefix = LEFT('Listado Trades'[ID Trade], 34)
+RETURN
+    MAXX(
+        TOPN(
+            1,
+            FILTER(
+                ALL(trades),
+                LEFT(trades[dealId], 34) = vPrefix
+                    && trades[type] = "WORKING_ORDER"
+                    && trades[status] = "EXECUTED"
+            ),
+            trades[date], ASC
+        ),
+        trades[details_direction]
+    )
+```
+
+#### Columna calculada `Tamaño`
+
+```dax
+Tamaño =
+VAR vPrefix = LEFT('Listado Trades'[ID Trade], 34)
+RETURN
+    MAXX(
+        TOPN(
+            1,
+            FILTER(
+                ALL(trades),
+                LEFT(trades[dealId], 34) = vPrefix
+                    && trades[type] = "WORKING_ORDER"
+                    && trades[status] = "EXECUTED"
+            ),
+            trades[date], ASC
+        ),
+        IFERROR(VALUE(trades[details_size]), BLANK())
+    )
+```
+
+#### Columna calculada `Precio Entrada`
+
+> `details_openPrice` solo está disponible para trades tipo POSITION (no WORKING_ORDER). Para los demás se usa `details_level` como fallback.
+
+```dax
+Precio Entrada =
+VAR vPrefix = LEFT('Listado Trades'[ID Trade], 34)
+VAR vOpenPrice =
+    MAXX(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[dealId], 34) = vPrefix
+                && NOT ISBLANK(trades[details_openPrice])
+                && IFERROR(trades[details_openPrice] + 0, -1) > 0
+        ),
+        IFERROR(trades[details_openPrice] + 0, BLANK())
+    )
+VAR vLevelPrice =
+    MAXX(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[dealId], 34) = vPrefix
+                && trades[details_level] <> ""
+                && NOT ISBLANK(trades[details_level])
+        ),
+        VALUE(trades[details_level])
+    )
+RETURN
+    IF(NOT ISBLANK(vOpenPrice) && vOpenPrice > 0, vOpenPrice, vLevelPrice)
+```
+
+#### Columna calculada `Stop Loss Inicial`
+
+```dax
+Stop Loss Inicial =
+MAXX(
+    TOPN(
+        1,
+        FILTER(
+            ALL(trades),
+            LEFT(trades[dealId], 34) = LEFT('Listado Trades'[ID Trade], 34)
+                && trades[type] = "STOP_AND_LIMIT"
+                && trades[details_level] <> ""
+                && NOT ISBLANK(trades[details_level])
+                && VALUE(trades[details_level]) > 0
+        ),
+        trades[date],
+        ASC
+    ),
+    IFERROR(VALUE(trades[details_stopLevel]), BLANK())
+)
+```
+
+#### Columna calculada `Total Swaps`
+
+> Los registros SWAP en `operaciones` no contienen `dealId`, por lo que no es posible vincularlos directamente a un trade específico. Se usa rango de fechas (apertura desde `trades`, cierre desde `operaciones`) filtrado por instrumento. Si dos trades del mismo instrumento se solapan en el tiempo, los swaps del período de solapamiento se cuentan en ambos.
+
+```dax
+Total Swaps =
+VAR vID = 'Listado Trades'[ID Trade]
+VAR vPrefix = LEFT(vID, 34)
+VAR vInstrumento = 'Listado Trades'[Instrumento]
+VAR vFechaApertura =
+    MINX(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[dealId], 34) = vPrefix
+                && trades[type] = "WORKING_ORDER"
+                && trades[status] = "EXECUTED"
+        ),
+        IFERROR(DATEVALUE(LEFT(trades[date], 10)), BLANK())
+    )
+VAR vFechaCierreStr =
+    CALCULATE(
+        MAX(operaciones[date]),
+        FILTER(
+            ALL(operaciones),
+            operaciones[dealId] = vID
+                && operaciones[transactionType] = "TRADE"
+        )
+    )
+VAR vFechaCierre =
+    IF(ISBLANK(vFechaCierreStr), TODAY(),
+        IFERROR(DATEVALUE(LEFT(vFechaCierreStr, 10)), TODAY()))
+RETURN
+    IFERROR(
+        SUMX(
+            FILTER(
+                ALL(operaciones),
+                operaciones[transactionType] = "SWAP"
+                    && operaciones[instrumentName] = vInstrumento
+                    && IFERROR(DATEVALUE(LEFT(operaciones[date], 10)), BLANK()) >= vFechaApertura
+                    && IFERROR(DATEVALUE(LEFT(operaciones[date], 10)), BLANK()) <= vFechaCierre
+            ),
+            IFERROR(VALUE(operaciones[size]), 0)
+        ),
+        0
+    )
+```
+
 ---
 
 ## Historial de cambios
@@ -685,3 +869,4 @@ RANKX(
 | v11 | Power BI: nueva tabla calculada `CalendarioMensual` con columnas `Mes`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Mensual`, `Resultado Mensual`, `Balance Final`, `Balance Inicial`, `Rentabilidad %`. Misma lógica que `Calendario` diario pero agrupando por mes usando `LEFT(date, 7)` y `FORMAT(date, "YYYY-MM")`. `Balance Final` y `Balance Inicial` usan `ROUND(..., 2)` para evitar errores de precisión flotante. `Rentabilidad %` multiplica por 100 en la fórmula y se formatea como Número decimal fijo — el formato Porcentaje de Power BI altera el valor internamente. |
 | v12 | Nueva colección MongoDB `posiciones_abiertas`: snapshot de posiciones abiertas guardado en cada ejecución del Lambda (se borra y reescribe completamente). Downloader actualizado con método `get_open_positions()` y lógica de guardado. Power BI: nueva tabla `posiciones_abiertas` en el script de conexión. Nueva tabla calculada `Listado Trades` con `UNION` de trades cerrados (`operaciones`) y abiertos (`posiciones_abiertas`), más columna calculada `N°` con `RANKX`. |
 | v13 | Fix definitivo `posiciones_abiertas`: reemplaza llamada a API `/positions` de Capital.com (que devolvía vacío) por función `calculate_open_trades_from_mongodb()` que detecta trades abiertos comparando `WO+EXECUTED` en `trades` contra cierres en `operaciones` usando prefijos de 34 chars del `dealId`. Fix `Trades Abiertos` en `Calendario` y `CalendarioMensual`: usa `SUMMARIZE+MIN` para contar trades únicos cerrados (208) en lugar de eventos de cierre (211), eliminando el doble conteo por cierres parciales (GOLD, AUDUSD). La suma total de `Trades Abiertos` cuadra ahora con `Listado Trades`. |
+| v14 | Power BI: columnas calculadas en tabla `Listado Trades`: `Instrumento`, `Fecha Apertura`, `Dirección`, `Tamaño`, `Precio Entrada` (híbrido `details_openPrice` + `details_level`), `Stop Loss Inicial`, `Total Swaps`. Pendiente: `Total Swaps` usa rango de fechas por instrumento porque los registros SWAP en `operaciones` no incluyen `dealId` — si Capital.com vincula swaps a trades específicos, se debe investigar el campo `reference` en registros SWAP. |
