@@ -684,28 +684,60 @@ RETURN
 
 #### Columna calculada `Fecha Apertura`
 
+> Usa prefijo de 34 chars. Fallback a 32 chars para 2 trades edge case (USDJPY, GOLD) cuyo dealId de cierre difiere en más posiciones del opening WO.
+
 ```dax
 Fecha Apertura =
 VAR vID = 'Listado Trades'[ID Trade]
-VAR vPrefix = LEFT(vID, 34)
-RETURN
+VAR vResult34 =
     IFERROR(
-        DATEVALUE(
-            LEFT(
-                MINX(
-                    FILTER(
-                        ALL(trades),
-                        LEFT(trades[dealId], 34) = vPrefix
-                            && trades[type] = "WORKING_ORDER"
-                            && trades[status] = "EXECUTED"
-                    ),
-                    trades[date]
+        DATEVALUE(LEFT(
+            MINX(
+                FILTER(
+                    ALL(trades),
+                    LEFT(trades[dealId], 34) = LEFT(vID, 34)
+                        && trades[type] = "WORKING_ORDER"
+                        && trades[status] = "EXECUTED"
                 ),
-                10
-            )
-        ),
+                trades[date]
+            ), 10
+        )),
         BLANK()
     )
+VAR vResult32 =
+    IFERROR(
+        DATEVALUE(LEFT(
+            MINX(
+                FILTER(
+                    ALL(trades),
+                    LEFT(trades[dealId], 32) = LEFT(vID, 32)
+                        && trades[type] = "WORKING_ORDER"
+                        && trades[status] = "EXECUTED"
+                ),
+                trades[date]
+            ), 10
+        )),
+        BLANK()
+    )
+RETURN IF(NOT ISBLANK(vResult34), vResult34, vResult32)
+```
+
+#### Columna calculada `Fecha Cierre`
+
+```dax
+Fecha Cierre =
+VAR vID = 'Listado Trades'[ID Trade]
+VAR vTexto =
+    CALCULATE(
+        MAX(operaciones[date]),
+        FILTER(
+            ALL(operaciones),
+            operaciones[dealId] = vID
+                && operaciones[transactionType] = "TRADE"
+        )
+    )
+RETURN
+IF(NOT ISBLANK(vTexto), DATEVALUE(LEFT(vTexto, 10)), BLANK())
 ```
 
 #### Columna calculada `Dirección`
@@ -805,49 +837,162 @@ MAXX(
 
 #### Columna calculada `Total Swaps`
 
-> Los registros SWAP en `operaciones` no contienen `dealId`, por lo que no es posible vincularlos directamente a un trade específico. Se usa rango de fechas (apertura desde `trades`, cierre desde `operaciones`) filtrado por instrumento. Si dos trades del mismo instrumento se solapan en el tiempo, los swaps del período de solapamiento se cuentan en ambos.
+> Los registros SWAP en `operaciones` no contienen `dealId`. Se vinculan por instrumento y rango de fechas (apertura–cierre). Si hay dos trades simultáneos del mismo instrumento, los swaps se reparten proporcionalmente según el tamaño de cada trade.
 
 ```dax
 Total Swaps =
 VAR vID = 'Listado Trades'[ID Trade]
 VAR vPrefix = LEFT(vID, 34)
-VAR vInstrumento = 'Listado Trades'[Instrumento]
-VAR vFechaApertura =
-    MINX(
-        FILTER(
-            ALL(trades),
-            LEFT(trades[dealId], 34) = vPrefix
-                && trades[type] = "WORKING_ORDER"
-                && trades[status] = "EXECUTED"
-        ),
-        IFERROR(DATEVALUE(LEFT(trades[date], 10)), BLANK())
-    )
-VAR vFechaCierreStr =
+VAR vTamano = IFERROR('Listado Trades'[Tamaño], 0)
+VAR vInstrumento =
     CALCULATE(
-        MAX(operaciones[date]),
+        MIN(operaciones[instrumentName]),
         FILTER(
             ALL(operaciones),
             operaciones[dealId] = vID
                 && operaciones[transactionType] = "TRADE"
         )
     )
-VAR vFechaCierre =
-    IF(ISBLANK(vFechaCierreStr), TODAY(),
-        IFERROR(DATEVALUE(LEFT(vFechaCierreStr, 10)), TODAY()))
-RETURN
+VAR vFechaApertura34 =
     IFERROR(
-        SUMX(
+        MINX(
             FILTER(
-                ALL(operaciones),
-                operaciones[transactionType] = "SWAP"
-                    && operaciones[instrumentName] = vInstrumento
-                    && IFERROR(DATEVALUE(LEFT(operaciones[date], 10)), BLANK()) >= vFechaApertura
-                    && IFERROR(DATEVALUE(LEFT(operaciones[date], 10)), BLANK()) <= vFechaCierre
+                ALL(trades),
+                LEFT(trades[dealId], 34) = vPrefix
+                    && trades[type] = "WORKING_ORDER"
+                    && trades[status] = "EXECUTED"
             ),
-            IFERROR(VALUE(operaciones[size]), 0)
+            IFERROR(DATEVALUE(LEFT(trades[date], 10)), BLANK())
         ),
-        0
+        BLANK()
     )
+VAR vFechaApertura32 =
+    IFERROR(
+        MINX(
+            FILTER(
+                ALL(trades),
+                LEFT(trades[dealId], 32) = LEFT(vID, 32)
+                    && trades[type] = "WORKING_ORDER"
+                    && trades[status] = "EXECUTED"
+            ),
+            IFERROR(DATEVALUE(LEFT(trades[date], 10)), BLANK())
+        ),
+        BLANK()
+    )
+VAR vFechaApertura =
+    IF(NOT ISBLANK(vFechaApertura34), vFechaApertura34, vFechaApertura32)
+VAR vFechaCierre =
+    IFERROR(
+        DATEVALUE(LEFT(
+            CALCULATE(
+                MAX(operaciones[date]),
+                FILTER(
+                    ALL(operaciones),
+                    operaciones[dealId] = vID
+                        && operaciones[transactionType] = "TRADE"
+                )
+            ), 10
+        )),
+        TODAY()
+    )
+VAR vTotalSwap =
+    SUMX(
+        FILTER(
+            ALL(operaciones),
+            operaciones[transactionType] = "SWAP"
+                && operaciones[instrumentName] = vInstrumento
+                && IFERROR(DATEVALUE(LEFT(operaciones[date], 10)), BLANK()) >= vFechaApertura
+                && IFERROR(DATEVALUE(LEFT(operaciones[date], 10)), BLANK()) <= vFechaCierre
+        ),
+        IFERROR(VALUE(operaciones[size]), 0)
+    )
+VAR vTotalTamano =
+    SUMX(
+        FILTER(
+            ALL('Listado Trades'),
+            'Listado Trades'[Instrumento] = vInstrumento
+                && NOT ISBLANK('Listado Trades'[Fecha Apertura])
+                && 'Listado Trades'[Fecha Apertura] <= vFechaCierre
+                && NOT ISBLANK('Listado Trades'[Fecha Cierre])
+                && 'Listado Trades'[Fecha Cierre] >= vFechaApertura
+        ),
+        IFERROR('Listado Trades'[Tamaño], 0)
+    )
+RETURN
+    IF(
+        vTotalTamano = 0 || ISBLANK(vInstrumento),
+        0,
+        IFERROR(vTotalSwap * vTamano / vTotalTamano, 0)
+    )
+```
+
+#### Columna calculada `PnL Total`
+
+> Suma todos los cierres parciales del mismo trade (GOLD, AUDUSD tienen más de 1 cierre). Usa prefijo de 34 chars para agrupar todos los eventos de cierre.
+
+```dax
+PnL Total =
+VAR vID = 'Listado Trades'[ID Trade]
+VAR vPrefix = LEFT(vID, 34)
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[dealId], 34) = vPrefix
+            && operaciones[transactionType] = "TRADE"
+    ),
+    IFERROR(VALUE(operaciones[size]), 0)
+)
+```
+
+#### Columna calculada `Resultado`
+
+```dax
+Resultado =
+'Listado Trades'[PnL Total] + 'Listado Trades'[Total Swaps]
+```
+
+#### Columna calculada `Estado`
+
+```dax
+Estado =
+IF('Listado Trades'[Resultado] >= 0, "Ganado", "Perdido")
+```
+
+#### Columna calculada `R Multiple`
+
+```dax
+R Multiple =
+DIVIDE('Listado Trades'[Resultado], ABS('Listado Trades'[Riesgo USD]))
+```
+
+#### Medidas en Listado Trades
+
+**% Ganados** (para tarjeta — formatear como Porcentaje):
+```dax
+% Ganados =
+DIVIDE(
+    COUNTROWS(FILTER('Listado Trades', 'Listado Trades'[Estado] = "Ganado")),
+    COUNTROWS('Listado Trades')
+)
+```
+
+**Esperanza** (resultado total / riesgo total):
+```dax
+Esperanza =
+DIVIDE(
+    SUM('Listado Trades'[Resultado]),
+    SUM('Listado Trades'[Riesgo USD])
+)
+```
+
+**Kelly** (criterio de Kelly):
+```dax
+Kelly =
+DIVIDE(
+    ABS([% Ganados]) * [Esperanza] * AVERAGE('Listado Trades'[Riesgo USD]),
+    (1 - [% Ganados]) * AVERAGE('Listado Trades'[Riesgo USD])
+)
 ```
 
 ---
@@ -870,3 +1015,4 @@ RETURN
 | v12 | Nueva colección MongoDB `posiciones_abiertas`: snapshot de posiciones abiertas guardado en cada ejecución del Lambda (se borra y reescribe completamente). Downloader actualizado con método `get_open_positions()` y lógica de guardado. Power BI: nueva tabla `posiciones_abiertas` en el script de conexión. Nueva tabla calculada `Listado Trades` con `UNION` de trades cerrados (`operaciones`) y abiertos (`posiciones_abiertas`), más columna calculada `N°` con `RANKX`. |
 | v13 | Fix definitivo `posiciones_abiertas`: reemplaza llamada a API `/positions` de Capital.com (que devolvía vacío) por función `calculate_open_trades_from_mongodb()` que detecta trades abiertos comparando `WO+EXECUTED` en `trades` contra cierres en `operaciones` usando prefijos de 34 chars del `dealId`. Fix `Trades Abiertos` en `Calendario` y `CalendarioMensual`: usa `SUMMARIZE+MIN` para contar trades únicos cerrados (208) en lugar de eventos de cierre (211), eliminando el doble conteo por cierres parciales (GOLD, AUDUSD). La suma total de `Trades Abiertos` cuadra ahora con `Listado Trades`. |
 | v14 | Power BI: columnas calculadas en tabla `Listado Trades`: `Instrumento`, `Fecha Apertura`, `Dirección`, `Tamaño`, `Precio Entrada` (híbrido `details_openPrice` + `details_level`), `Stop Loss Inicial`, `Total Swaps`. Pendiente: `Total Swaps` usa rango de fechas por instrumento porque los registros SWAP en `operaciones` no incluyen `dealId` — si Capital.com vincula swaps a trades específicos, se debe investigar el campo `reference` en registros SWAP. |
+| v15 | Power BI: `Fecha Apertura` actualizada con fallback a 32 chars (fix para 2 trades edge case: USDJPY y GOLD). Nueva columna `Fecha Cierre`. `Total Swaps` actualizado con asignación proporcional por tamaño de trade (fix para trades simultáneos del mismo instrumento). Nuevas columnas: `PnL Total` (suma cierres parciales por prefijo 34 chars), `Resultado` (PnL Total + Total Swaps), `Estado` (Ganado/Perdido), `R Multiple` (Resultado / ABS(Riesgo USD)). Nuevas medidas: `% Ganados`, `Esperanza`, `Kelly`. |
