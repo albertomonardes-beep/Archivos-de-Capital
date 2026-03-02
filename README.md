@@ -986,6 +986,15 @@ DIVIDE(
 )
 ```
 
+**Riesgobeneficio** (suma de resultado dividida por el valor absoluto del riesgo total):
+```dax
+Riesgobeneficio =
+DIVIDE(
+    SUM('Listado Trades'[Resultado]),
+    ABS(SUM('Listado Trades'[Riesgo USD]))
+)
+```
+
 **Kelly** (criterio de Kelly):
 ```dax
 Kelly =
@@ -1016,3 +1025,4 @@ DIVIDE(
 | v13 | Fix definitivo `posiciones_abiertas`: reemplaza llamada a API `/positions` de Capital.com (que devolvía vacío) por función `calculate_open_trades_from_mongodb()` que detecta trades abiertos comparando `WO+EXECUTED` en `trades` contra cierres en `operaciones` usando prefijos de 34 chars del `dealId`. Fix `Trades Abiertos` en `Calendario` y `CalendarioMensual`: usa `SUMMARIZE+MIN` para contar trades únicos cerrados (208) en lugar de eventos de cierre (211), eliminando el doble conteo por cierres parciales (GOLD, AUDUSD). La suma total de `Trades Abiertos` cuadra ahora con `Listado Trades`. |
 | v14 | Power BI: columnas calculadas en tabla `Listado Trades`: `Instrumento`, `Fecha Apertura`, `Dirección`, `Tamaño`, `Precio Entrada` (híbrido `details_openPrice` + `details_level`), `Stop Loss Inicial`, `Total Swaps`. Pendiente: `Total Swaps` usa rango de fechas por instrumento porque los registros SWAP en `operaciones` no incluyen `dealId` — si Capital.com vincula swaps a trades específicos, se debe investigar el campo `reference` en registros SWAP. |
 | v15 | Power BI: `Fecha Apertura` actualizada con fallback a 32 chars (fix para 2 trades edge case: USDJPY y GOLD). Nueva columna `Fecha Cierre`. `Total Swaps` actualizado con asignación proporcional por tamaño de trade (fix para trades simultáneos del mismo instrumento). Nuevas columnas: `PnL Total` (suma cierres parciales por prefijo 34 chars), `Resultado` (PnL Total + Total Swaps), `Estado` (Ganado/Perdido), `R Multiple` (Resultado / ABS(Riesgo USD)). Nuevas medidas: `% Ganados`, `Esperanza`, `Kelly`. |
+| v16 | Power BI: nueva medida `Riesgobeneficio` = SUM(Resultado) / ABS(SUM(Riesgo USD)). Usa valor absoluto del riesgo total para que el resultado siempre refleje correctamente la relación beneficio/riesgo. |
