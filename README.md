@@ -74,7 +74,7 @@ La función está programada para ejecutarse automáticamente con dos triggers:
 | `operaciones` | Transacciones de Capital.com (trades, swaps, depósitos, rebates, correcciones) | `reference` (clave compuesta si está vacío) |
 | `trades` | Historial de actividad detallado | `dealId` |
 | `activos` | Parámetros fijos por instrumento | `instrumentName` |
-| `posiciones_abiertas` | Snapshot de posiciones actualmente abiertas (se borra y reescribe en cada ejecución) | — |
+| `posiciones_abiertas` | ~~Snapshot de posiciones actualmente abiertas~~ — **No implementada en el panel actual** | — |
 
 > **Tipos de transacción en `operaciones`:** `Deposit`, `TRADE`, `SWAP`, `Rebate`, `TRADE_CORRECTION`, `VOID`
 
@@ -636,25 +636,19 @@ IF(
 
 ### Tabla Listado Trades
 
-Tabla calculada que lista cada trade único (abierto o cerrado):
+Tabla calculada que lista cada trade cerrado:
 
 ```dax
 Listado Trades =
 DISTINCT(
-    UNION(
-        SELECTCOLUMNS(
-            FILTER(operaciones, operaciones[transactionType] = "TRADE"),
-            "ID Trade", operaciones[dealId]
-        ),
-        SELECTCOLUMNS(
-            posiciones_abiertas,
-            "ID Trade", posiciones_abiertas[dealId]
-        )
+    SELECTCOLUMNS(
+        FILTER(operaciones, operaciones[transactionType] = "TRADE"),
+        "ID Trade", operaciones[dealId]
     )
 )
 ```
 
-> La primera parte trae los trades **cerrados** desde `operaciones`. La segunda trae los trades actualmente **abiertos** desde `posiciones_abiertas` (snapshot actualizado en cada ejecución del Lambda). `DISTINCT` evita duplicados en la transición de abierto a cerrado.
+> La tabla `posiciones_abiertas` fue documentada en v12-v13 pero **no está implementada en el panel actual**. La tabla solo contiene trades cerrados desde `operaciones`.
 
 #### Columna calculada `N°`
 
@@ -928,17 +922,16 @@ RETURN
 
 #### Columna calculada `PnL Total`
 
-> Suma todos los cierres parciales del mismo trade (GOLD, AUDUSD tienen más de 1 cierre). Usa prefijo de 34 chars para agrupar todos los eventos de cierre.
+> Usa match exacto por `dealId`. **Importante:** la versión anterior usaba prefijo de 34 chars (`LEFT(operaciones[dealId], 34) = vPrefix`), lo que causaba que trades con cierres parciales (GOLD, AUDUSD) sumaran el P&L completo en cada fila, produciendo un total de `SUM(Resultado)` muy negativo aunque la cuenta estuviera en positivo. El match exacto corrige esto — cada fila suma solo su propio cierre.
 
 ```dax
 PnL Total =
 VAR vID = 'Listado Trades'[ID Trade]
-VAR vPrefix = LEFT(vID, 34)
 RETURN
 SUMX(
     FILTER(
         ALL(operaciones),
-        LEFT(operaciones[dealId], 34) = vPrefix
+        operaciones[dealId] = vID
             && operaciones[transactionType] = "TRADE"
     ),
     IFERROR(VALUE(operaciones[size]), 0)
@@ -965,6 +958,25 @@ IF('Listado Trades'[Resultado] >= 0, "Ganado", "Perdido")
 R Multiple =
 DIVIDE('Listado Trades'[Resultado], ABS('Listado Trades'[Riesgo USD]))
 ```
+
+#### Columna calculada `Configuracion`
+
+```dax
+Configuracion =
+VAR vInstrumento = 'Listado Trades'[Instrumento]
+VAR vFechaApertura = 'Listado Trades'[Fecha Apertura]
+RETURN
+IF(
+    vFechaApertura >= DATE(2025, 12, 17),
+    CALCULATE(
+        MIN(activos[configuracion]),
+        FILTER(ALL(activos), activos[instrumentName] = vInstrumento)
+    ),
+    ""
+)
+```
+
+> Trades abiertos antes del 17-12-2025 quedan en blanco, igual que el resto del modelo.
 
 #### Medidas en Listado Trades
 
@@ -1026,3 +1038,4 @@ DIVIDE(
 | v14 | Power BI: columnas calculadas en tabla `Listado Trades`: `Instrumento`, `Fecha Apertura`, `Dirección`, `Tamaño`, `Precio Entrada` (híbrido `details_openPrice` + `details_level`), `Stop Loss Inicial`, `Total Swaps`. Pendiente: `Total Swaps` usa rango de fechas por instrumento porque los registros SWAP en `operaciones` no incluyen `dealId` — si Capital.com vincula swaps a trades específicos, se debe investigar el campo `reference` en registros SWAP. |
 | v15 | Power BI: `Fecha Apertura` actualizada con fallback a 32 chars (fix para 2 trades edge case: USDJPY y GOLD). Nueva columna `Fecha Cierre`. `Total Swaps` actualizado con asignación proporcional por tamaño de trade (fix para trades simultáneos del mismo instrumento). Nuevas columnas: `PnL Total` (suma cierres parciales por prefijo 34 chars), `Resultado` (PnL Total + Total Swaps), `Estado` (Ganado/Perdido), `R Multiple` (Resultado / ABS(Riesgo USD)). Nuevas medidas: `% Ganados`, `Esperanza`, `Kelly`. |
 | v16 | Power BI: nueva medida `Riesgobeneficio` = SUM(Resultado) / ABS(SUM(Riesgo USD)). Usa valor absoluto del riesgo total para que el resultado siempre refleje correctamente la relación beneficio/riesgo. |
+| v17 | Power BI: fix bug `PnL Total` — cambiado de prefijo 34 chars a match exacto por `dealId`. El prefijo causaba que trades con cierres parciales (GOLD, AUDUSD) sumaran el P&L completo en cada fila, produciendo `SUM(Resultado)` muy negativo aunque la cuenta estuviera en positivo. Nueva columna `Configuracion` en `Listado Trades` que muestra la configuración aplicada a cada trade desde `activos`. Corregida definición de `Listado Trades`: eliminada referencia a `posiciones_abiertas` (tabla no implementada en el panel). |
