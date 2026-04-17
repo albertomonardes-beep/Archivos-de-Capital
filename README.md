@@ -594,12 +594,14 @@ ROUND(
 2)
 ```
 
-**Balance Inicial** (Balance Final del mes anterior, redondeado a 2 decimales):
+**Balance Inicial** (Balance Final del mes anterior, redondeado a 2 decimales — el primer mes se fija en 1000):
 ```dax
 Balance Inicial =
-ROUND(
-    CalendarioMensual[Balance Final] - CalendarioMensual[Resultado Mensual],
-2)
+IF(
+    CalendarioMensual[Date] = MINX(ALL(CalendarioMensual), CalendarioMensual[Date]),
+    1000,
+    ROUND(CalendarioMensual[Balance Final] - CalendarioMensual[Resultado Mensual], 2)
+)
 ```
 
 **Rentabilidad %** (resultado del mes como porcentaje del balance inicial):
@@ -616,6 +618,220 @@ IF(
 ```
 
 > Formatear la columna como **Número decimal fijo** — NO como Porcentaje. El `* 100` en la fórmula convierte el ratio en porcentaje directamente (ej: -2,9968 significa -2,9968%). Usar Porcentaje como formato causa que Power BI altere el valor internamente.
+
+---
+
+---
+
+### Tabla CalendarioAnual
+
+Tabla calculada con el primer día de cada año desde el inicio del proyecto:
+
+```dax
+CalendarioAnual =
+FILTER(
+    CALENDAR(DATE(2024, 1, 1), EOMONTH(TODAY(), 0)),
+    MONTH([Date]) = 1 && DAY([Date]) = 1
+)
+```
+
+> Cada fila representa un año. La columna de fecha se llama `[Date]` y contiene el 1 de enero de cada año.
+
+#### Columnas calculadas en CalendarioAnual
+
+**Año:**
+```dax
+Anio = FORMAT(CalendarioAnual[Date], "YYYY")
+```
+
+**Trades cerrados:**
+```dax
+Trades cerrados =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+COUNTROWS(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && LOWER(operaciones[note]) = "trade closed"
+    )
+)
+```
+
+**Trades Abiertos:**
+```dax
+Trades Abiertos =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+VAR TotalWO =
+    COUNTROWS(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[date], 4) = vAnioStr
+                && trades[type] = "WORKING_ORDER"
+                && trades[status] = "EXECUTED"
+        )
+    )
+VAR TradesUnicos =
+    SUMMARIZE(
+        FILTER(ALL(operaciones), LOWER(operaciones[note]) = "trade closed"),
+        operaciones[dealId],
+        "FechaCierre", MIN(operaciones[date])
+    )
+VAR CerradosEseAnio =
+    COUNTROWS(
+        FILTER(
+            TradesUnicos,
+            LEFT([FechaCierre], 4) = vAnioStr
+        )
+    )
+RETURN MAX(0, TotalWO - CerradosEseAnio)
+```
+
+**Deposit:**
+```dax
+Deposit =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && operaciones[transactionType] = "DEPOSIT"
+            && LOWER(operaciones[status]) = "processed"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Swap:**
+```dax
+Swap =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && operaciones[transactionType] = "SWAP"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Rebate:**
+```dax
+Rebate =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && operaciones[transactionType] = "REBATE"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Trade Correction:**
+```dax
+Trade Correction =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && operaciones[transactionType] = "TRADE_CORRECTION"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Void:**
+```dax
+Void =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && operaciones[transactionType] = "VOID"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**PnL Anual:**
+```dax
+PnL Anual =
+VAR vAnioStr = FORMAT(CalendarioAnual[Date], "YYYY")
+RETURN
+SUMX(
+    FILTER(
+        ALL(operaciones),
+        LEFT(operaciones[date], 4) = vAnioStr
+            && operaciones[transactionType] = "TRADE"
+            && operaciones[note] = "Trade closed"
+    ),
+    IF(ISBLANK(operaciones[size]) || operaciones[size] = "", 0, VALUE(operaciones[size]))
+)
+```
+
+**Resultado Anual** (sin Deposit — Deposit se acumula por separado en Balance Final):
+```dax
+Resultado Anual =
+CalendarioAnual[Swap]
+    + CalendarioAnual[Rebate]
+    + CalendarioAnual[Trade Correction]
+    + CalendarioAnual[Void]
+    + CalendarioAnual[PnL Anual]
+```
+
+> ⚠️ `Deposit` no se incluye en `Resultado Anual` para que el resultado refleje solo el rendimiento operativo. Los depósitos sí se acumulan en `Balance Final`.
+
+**Balance Final** (acumula Resultado Anual + Deposit):
+```dax
+Balance Final =
+ROUND(
+    CALCULATE(
+        SUMX(
+            CalendarioAnual,
+            CalendarioAnual[Resultado Anual] + CalendarioAnual[Deposit]
+        ),
+        FILTER(
+            ALL(CalendarioAnual),
+            CalendarioAnual[Date] <= EARLIER(CalendarioAnual[Date])
+        )
+    ),
+2)
+```
+
+**Balance Inicial** (el primer año se fija en 1000):
+```dax
+Balance Inicial =
+IF(
+    CalendarioAnual[Date] = MINX(ALL(CalendarioAnual), CalendarioAnual[Date]),
+    1000,
+    ROUND(CalendarioAnual[Balance Final] - CalendarioAnual[Resultado Anual], 2)
+)
+```
+
+**Rentabilidad %:**
+```dax
+Rentabilidad % =
+IF(
+    CalendarioAnual[Balance Inicial] = 0,
+    0,
+    DIVIDE(
+        CalendarioAnual[Balance Final] - CalendarioAnual[Balance Inicial],
+        CalendarioAnual[Balance Inicial]
+    ) * 100
+)
+```
+
+> Formatear como **Número decimal fijo**, igual que en `CalendarioMensual`.
 
 ---
 
@@ -959,6 +1175,43 @@ R Multiple =
 DIVIDE('Listado Trades'[Resultado], ABS('Listado Trades'[Riesgo USD]))
 ```
 
+#### Columna calculada `R`
+
+> Riesgo en USD del trade: 2% del Balance Inicial del mes en que se abrió el trade. No puede referenciarse `[Fecha Apertura]` directamente desde otra columna calculada — la fecha se recalcula desde `[ID Trade]`.
+
+```dax
+R =
+VAR vID = [ID Trade]
+VAR vFechaStr =
+    MINX(
+        FILTER(
+            ALL(trades),
+            LEFT(trades[dealId], 34) = LEFT(vID, 34)
+                && trades[type] = "WORKING_ORDER"
+                && trades[status] = "EXECUTED"
+        ),
+        trades[date]
+    )
+VAR vFecha = IFERROR(DATEVALUE(LEFT(vFechaStr, 10)), BLANK())
+VAR vMes = DATE(YEAR(vFecha), MONTH(vFecha), 1)
+RETURN
+MAXX(
+    FILTER(
+        ALL(CalendarioMensual),
+        CalendarioMensual[Date] = vMes
+    ),
+    CalendarioMensual[Balance Inicial]
+) * 0.02
+```
+
+#### Columna calculada `Riesgo R`
+
+> Relación entre el riesgo real en USD y el R definido (2% del balance). Permite verificar si el riesgo tomado es consistente con la regla del 2%.
+
+```dax
+Riesgo R = ABS(DIVIDE([Riesgo USD], [R]))
+```
+
 #### Columna calculada `Configuracion`
 
 ```dax
@@ -1038,4 +1291,5 @@ DIVIDE(
 | v14 | Power BI: columnas calculadas en tabla `Listado Trades`: `Instrumento`, `Fecha Apertura`, `Dirección`, `Tamaño`, `Precio Entrada` (híbrido `details_openPrice` + `details_level`), `Stop Loss Inicial`, `Total Swaps`. Pendiente: `Total Swaps` usa rango de fechas por instrumento porque los registros SWAP en `operaciones` no incluyen `dealId` — si Capital.com vincula swaps a trades específicos, se debe investigar el campo `reference` en registros SWAP. |
 | v15 | Power BI: `Fecha Apertura` actualizada con fallback a 32 chars (fix para 2 trades edge case: USDJPY y GOLD). Nueva columna `Fecha Cierre`. `Total Swaps` actualizado con asignación proporcional por tamaño de trade (fix para trades simultáneos del mismo instrumento). Nuevas columnas: `PnL Total` (suma cierres parciales por prefijo 34 chars), `Resultado` (PnL Total + Total Swaps), `Estado` (Ganado/Perdido), `R Multiple` (Resultado / ABS(Riesgo USD)). Nuevas medidas: `% Ganados`, `Esperanza`, `Kelly`. |
 | v16 | Power BI: nueva medida `Riesgobeneficio` = SUM(Resultado) / ABS(SUM(Riesgo USD)). Usa valor absoluto del riesgo total para que el resultado siempre refleje correctamente la relación beneficio/riesgo. |
+| v18 | Power BI: nueva tabla `CalendarioAnual` con columnas `Anio`, `Trades cerrados`, `Trades Abiertos`, `Deposit`, `Swap`, `Rebate`, `Trade Correction`, `Void`, `PnL Anual`, `Resultado Anual`, `Balance Final`, `Balance Inicial`, `Rentabilidad %`. `Resultado Anual` excluye `Deposit` (solo rendimiento operativo); `Balance Final` acumula `Resultado + Deposit`. `Balance Inicial` del primer año fijado en 1000. Fix `Balance Inicial` en `CalendarioMensual`: primer mes fijado en 1000. Nuevas columnas en `Listado Trades`: `R` (2% del Balance Inicial del mes de apertura) y `Riesgo R` (ABS(Riesgo USD / R)). `R` recalcula la fecha desde `[ID Trade]` porque DAX no permite referenciar `[Fecha Apertura]` desde otra columna calculada de la misma tabla. |
 | v17 | Power BI: fix bug `PnL Total` — cambiado de prefijo 34 chars a match exacto por `dealId`. El prefijo causaba que trades con cierres parciales (GOLD, AUDUSD) sumaran el P&L completo en cada fila, produciendo `SUM(Resultado)` muy negativo aunque la cuenta estuviera en positivo. Nueva columna `Configuracion` en `Listado Trades` que muestra la configuración aplicada a cada trade desde `activos`. Corregida definición de `Listado Trades`: eliminada referencia a `posiciones_abiertas` (tabla no implementada en el panel). |
