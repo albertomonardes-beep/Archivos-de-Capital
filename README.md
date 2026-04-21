@@ -1231,6 +1231,63 @@ IF(
 
 > Trades abiertos antes del 17-12-2025 quedan en blanco, igual que el resto del modelo.
 
+#### Columna calculada 
+Retorna el nombre del día de la semana en base a \:
+
+#### Columna calculada 
+Valor numérico del día de la semana. Necesaria para usar días en el eje X de gráficos de dispersión (Power BI solo acepta valores numéricos en ese eje):
+
+> 
+**Configuración del gráfico de dispersión por día:**
+
+| Campo del visual | Columna |
+|---|---|
+| Eje X | \ |
+| Eje Y | métrica deseada (Resultado, R Multiple, etc.) |
+| Detalles | \ |
+| Información sobre herramientas | \ |
+
+---
+
+#### Columna calculada `Día Semana`
+
+Retorna el nombre del día de la semana en base a `Fecha Apertura`:
+
+```dax
+Día Semana =
+SWITCH(
+    WEEKDAY('Listado Trades'[Fecha Apertura], 2),
+    1, "Lunes",
+    2, "Martes",
+    3, "Miércoles",
+    4, "Jueves",
+    5, "Viernes",
+    6, "Sábado",
+    7, "Domingo"
+)
+```
+
+#### Columna calculada `Orden Día`
+
+Valor numérico del día de la semana. Necesaria para usar días en el eje X de gráficos de dispersión (Power BI solo acepta valores numéricos en ese eje):
+
+```dax
+Orden Día = WEEKDAY('Listado Trades'[Fecha Apertura], 2)
+```
+
+> `1=Lunes, 2=Martes, ..., 7=Domingo`
+
+**Configuración del gráfico de dispersión por día:**
+
+| Campo del visual | Columna |
+|---|---|
+| Eje X | `Orden Día` |
+| Eje Y | métrica deseada (Resultado, R Multiple, etc.) |
+| Detalles | `Día Semana` |
+| Información sobre herramientas | `Día Semana` |
+
+---
+
 #### Medidas en Listado Trades
 
 **% Ganados** (para tarjeta — formatear como Porcentaje):
