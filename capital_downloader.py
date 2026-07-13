@@ -11,6 +11,13 @@ TELEGRAM_TOKEN     = (os.getenv("TELEGRAM_TOKEN") or "").strip()
 TELEGRAM_CHAT_ID   = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
 DB_NAME            = "capital"
 
+# Mapeo de nombres nuevos (API) a nombres canónicos históricos en MongoDB
+NOMBRE_CANONICO = {
+    "XAUUSD":  "Gold",
+    "XAGUSD":  "Silver",
+    "USCOCOA": "COCOA US",
+}
+
 OPERACIONES_COLUMNS = ['date', 'dateUtc', 'transactionType', 'note', 'reference', 'size', 'currency', 'status', 'instrumentName', 'dealId']
 
 TRADES_COLUMNS = ['date', 'dateUTC', 'dealId', 'epic', 'type', 'status', 'source',
@@ -75,7 +82,6 @@ class CapitalComAPI:
                 pass
             current_date += timedelta(days=1)
         return all_transactions
-
 
     def get_activity_history_detailed(self, date_obj):
         if not self.session_token:
@@ -179,6 +185,36 @@ def fix_existing_open_prices(trades_col):
     print(f"  {result.modified_count} registros actualizados con precio de apertura")
 
 
+def normalizar_instrumento(nombre):
+    """Traduce el nombre nuevo de Capital.com al nombre canónico histórico."""
+    return NOMBRE_CANONICO.get(nombre, nombre)
+
+
+def migrar_nombres_canonicos(db):
+    """Corrige en MongoDB los registros ya insertados con nombres nuevos."""
+    print("Normalizando nombres de activos en registros existentes...")
+    total = 0
+    for nuevo, canonico in NOMBRE_CANONICO.items():
+        r = db["operaciones"].update_many(
+            {"instrumentName": nuevo},
+            {"$set": {"instrumentName": canonico}}
+        )
+        if r.modified_count:
+            print(f"  operaciones: {r.modified_count} '{nuevo}' → '{canonico}'")
+            total += r.modified_count
+
+        r = db["trades"].update_many(
+            {"details_marketName": nuevo},
+            {"$set": {"details_marketName": canonico}}
+        )
+        if r.modified_count:
+            print(f"  trades: {r.modified_count} '{nuevo}' → '{canonico}'")
+            total += r.modified_count
+
+    if total == 0:
+        print("  Sin registros que migrar")
+
+
 def insert_data(collection, data_list, unique_field=None):
     if not data_list:
         return 0
@@ -266,6 +302,9 @@ def main():
     posiciones_col = db["posiciones_abiertas"]
 
     print()
+    migrar_nombres_canonicos(db)
+
+    print()
     print("Corrigiendo precios de apertura faltantes en registros existentes...")
     fix_existing_open_prices(trades_col)
 
@@ -302,6 +341,7 @@ def main():
         ops_processed = []
         for item in ops_data:
             doc = {col: item.get(col, '') for col in OPERACIONES_COLUMNS}
+            doc['instrumentName'] = normalizar_instrumento(doc.get('instrumentName', ''))
             try:
                 doc['size'] = float(doc['size']) if doc['size'] != '' else None
             except (ValueError, TypeError):
@@ -335,6 +375,7 @@ def main():
                     record[field] = float(record[field]) if record[field] != '' else None
                 except (ValueError, TypeError):
                     pass
+            record['details_marketName'] = normalizar_instrumento(record.get('details_marketName', ''))
             # Rellenar openPrice faltante para órdenes ejecutadas
             if not record.get('details_openPrice') and record.get('type') == 'WORKING_ORDER' and record.get('status') == 'EXECUTED':
                 record['details_openPrice'] = record.get('details_level')
