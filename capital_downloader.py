@@ -190,6 +190,59 @@ def normalizar_instrumento(nombre):
     return NOMBRE_CANONICO.get(nombre, nombre)
 
 
+def crear_prima_diaria_doc(record):
+    """
+    Crea un documento para operaciones a partir de un registro POSITION/SYSTEM
+    de la actividad. El campo 'details_level' contiene la tasa diaria y
+    'details_size' el tamaño; el costo real = -(level × size).
+    """
+    level = record.get('details_level')
+    size  = record.get('details_size')
+    if level is None or size is None:
+        return None
+    try:
+        costo = -round(float(level) * float(size), 2)
+    except (TypeError, ValueError):
+        return None
+    if costo == 0:
+        return None
+
+    date_str = record.get('date', '')
+    deal_id  = record.get('dealId', '')
+
+    return {
+        'date':            date_str,
+        'dateUtc':         record.get('dateUTC', ''),
+        'transactionType': 'SWAP',
+        'note':            'Daily premium',
+        'reference':       f"daily_prem_{deal_id}_{date_str[:10]}",
+        'size':            costo,
+        'currency':        record.get('details_currency', 'USD'),
+        'status':          'ACCEPTED',
+        'instrumentName':  normalizar_instrumento(record.get('epic', '')),
+        'dealId':          deal_id,
+    }
+
+
+def migrar_primas_existentes(db):
+    """Backfill: genera registros en operaciones para primas diarias
+    que ya están en trades pero que aún no tienen entrada en operaciones."""
+    print("Migrando primas diarias existentes desde trades...")
+    registros = list(db["trades"].find(
+        {"type": "POSITION", "source": "SYSTEM"},
+        {"date": 1, "dateUTC": 1, "dealId": 1, "epic": 1,
+         "details_level": 1, "details_size": 1, "details_currency": 1}
+    ))
+    if not registros:
+        print("  Sin registros de primas en trades")
+        return
+    docs = [d for r in registros for d in [crear_prima_diaria_doc(r)] if d]
+    if docs:
+        insert_data(db["operaciones"], docs, unique_field='reference')
+    else:
+        print("  Sin primas diarias para migrar")
+
+
 def migrar_nombres_canonicos(db):
     """Corrige en MongoDB los registros ya insertados con nombres nuevos."""
     print("Normalizando nombres de activos en registros existentes...")
@@ -305,6 +358,9 @@ def main():
     migrar_nombres_canonicos(db)
 
     print()
+    migrar_primas_existentes(db)
+
+    print()
     print("Corrigiendo precios de apertura faltantes en registros existentes...")
     fix_existing_open_prices(trades_col)
 
@@ -365,6 +421,7 @@ def main():
 
     if trades_data:
         trades_processed = []
+        primas_procesadas = []
         numeric_trade_fields = ['details_size', 'details_level', 'details_openPrice',
                                 'details_stopLevel', 'details_profitLevel']
         for item in trades_data:
@@ -379,9 +436,17 @@ def main():
             # Rellenar openPrice faltante para órdenes ejecutadas
             if not record.get('details_openPrice') and record.get('type') == 'WORKING_ORDER' and record.get('status') == 'EXECUTED':
                 record['details_openPrice'] = record.get('details_level')
+            # Detectar prima diaria (POSITION/SYSTEM) y preparar entrada en operaciones
+            if record.get('type') == 'POSITION' and record.get('source') == 'SYSTEM':
+                prima_doc = crear_prima_diaria_doc(record)
+                if prima_doc:
+                    primas_procesadas.append(prima_doc)
             trades_processed.append(record)
         print(f"  {len(trades_processed)} trades descargados")
         trades_insertados = insert_data(trades_col, trades_processed, unique_field='dealId')
+        if primas_procesadas:
+            print("  Insertando primas diarias en operaciones...")
+            insert_data(operaciones_col, primas_procesadas, unique_field='reference')
     else:
         print("  Sin nuevos trades")
 
