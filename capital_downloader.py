@@ -224,24 +224,6 @@ def crear_prima_diaria_doc(record):
     }
 
 
-def migrar_primas_existentes(db):
-    """Backfill: genera registros en operaciones para primas diarias
-    que ya están en trades pero que aún no tienen entrada en operaciones."""
-    print("Migrando primas diarias existentes desde trades...")
-    registros = list(db["trades"].find(
-        {"type": "POSITION", "source": "SYSTEM"},
-        {"date": 1, "dateUTC": 1, "dealId": 1, "epic": 1,
-         "details_level": 1, "details_size": 1, "details_currency": 1}
-    ))
-    if not registros:
-        print("  Sin registros de primas en trades")
-        return
-    docs = [d for r in registros for d in [crear_prima_diaria_doc(r)] if d]
-    if docs:
-        insert_data(db["operaciones"], docs, unique_field='reference')
-    else:
-        print("  Sin primas diarias para migrar")
-
 
 def migrar_nombres_canonicos(db):
     """Corrige en MongoDB los registros ya insertados con nombres nuevos."""
@@ -356,9 +338,6 @@ def main():
 
     print()
     migrar_nombres_canonicos(db)
-
-    print()
-    migrar_primas_existentes(db)
 
     print()
     print("Corrigiendo precios de apertura faltantes en registros existentes...")
