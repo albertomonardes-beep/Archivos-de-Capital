@@ -108,6 +108,26 @@ El script usa upsert, por lo que es seguro correrlo más de una vez.
 
 ---
 
+## Prima diaria (COCOA US)
+
+Capital.com aplica un ajuste de prima diaria a las 13:30 para instrumentos de tipo forward, como COCOA US. Este cargo **no aparece en el endpoint de transacciones** (`/history/transactions`) sino en el de actividad (`/history/activity`) como registros con `type=POSITION` y `source=SYSTEM`.
+
+El Lambda lo captura automáticamente en cada ejecución mediante detección inline en el loop de trades. El costo se calcula como `-(details_level × details_size)` y se inserta en `operaciones` con `transactionType=SWAP` y `note="Daily premium"`.
+
+La clave única es `reference = daily_prem_{dealId}_{fecha}`, por lo que no se generan duplicados aunque el Lambda corra varias veces.
+
+### Backfill de primas históricas
+
+El endpoint de actividad de Capital.com solo conserva aproximadamente **3 semanas de historial**. Si se necesita recuperar primas de períodos recientes que el Lambda no capturó:
+
+```powershell
+C:\Users\alber\AppData\Local\Python\pythoncore-3.14-64\python.exe backfill_primas.py
+```
+
+Ajustar `FECHA_INICIO` en el script al día anterior a la apertura de la posición. El script es idempotente (upsert por `reference`).
+
+---
+
 ## Procedimiento de backfill
 
 Si se detectan registros faltantes en `operaciones` (por ejemplo, tras corregir un bug de deduplicación), se puede forzar una descarga completa desde el inicio:
